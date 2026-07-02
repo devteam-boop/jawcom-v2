@@ -543,6 +543,7 @@ frontend/src/
 - Frontend: Service layer placeholder structure
 - Backend: FastAPI scaffold with MongoDB connection
 - Backend: Core foundation (config, database, core) - Sprint 1
+- Backend: Provider abstraction layer (WhatsApp/Email providers) - Sprint 2
 
 ### In Progress
 - Frontend architecture refactor per ARCHITECTURE.md (removing Contacts, Automation, renaming routes)
@@ -575,6 +576,7 @@ frontend/src/
 - Wire frontend services to placeholder backend endpoints
 - Define API contracts for all modules (OpenAPI spec)
 - Backend foundation (config, database, core) - Sprint 1
+- Provider abstraction layer - Sprint 2
 
 ### Next Sprint
 - Build JAWIS sync client (read-only API client + webhook receiver)
@@ -654,6 +656,11 @@ frontend/src/
 - **Benefits**: JAWIS can freely rename/reorganize stages. Stage mapping in JawCom is simple key-value.
 - **Tradeoffs**: If JAWIS deletes a stage, corresponding JawCom mappings become orphaned. UI should surface unmatched mappings.
 
+### AD-010: Provider abstraction layer for communication channels
+- **Reason**: Support multiple WhatsApp and Email providers without changing business logic. Enable easy switching between providers (Meta vs Twilio for WhatsApp, Resend vs SendGrid for Email).
+- **Benefits**: Vendor independence. Easy A/B testing of providers. Graceful fallback if primary provider fails. Clean separation of provider logic from business logic.
+- **Tradeoffs**: Additional abstraction layer adds complexity. Provider-specific features may not be exposed through common interface.
+
 ---
 
 ## 14. Changelog
@@ -662,6 +669,7 @@ frontend/src/
 |---|---|---|---|---|
 | 2026-07-02 | ALL | Initial master context document created | `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | N/A — foundation document |
 | 2026-07-03 | Backend | Sprint 1: Create backend foundation | `backend/app/config/settings.py`, `backend/app/config/logging.py`, `backend/app/database/base.py`, `backend/app/database/database.py`, `backend/app/database/session.py`, `backend/app/core/base_repository.py`, `backend/app/core/base_service.py`, `backend/app/core/dependencies.py`, `backend/app/main.py`, `backend/requirements.txt`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added core backend foundation with Clean Architecture, Repository Pattern, and Service Layer |
+| 2026-07-02 | Backend | Sprint 2: Create provider abstraction layer | `backend/app/providers/base/communication_provider.py`, `backend/app/providers/base/whatsapp_provider.py`, `backend/app/providers/base/email_provider.py`, `backend/app/providers/registry/provider_registry.py`, `backend/app/providers/meta/meta_provider.py`, `backend/app/providers/resend/resend_provider.py`, `backend/app/providers/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added provider abstraction layer enabling multiple WhatsApp/Email providers without changing business logic. Implemented MetaProvider (WhatsApp) and ResendProvider (Email) with dependency injection via ProviderRegistry |
 
 ---
 
