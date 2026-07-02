@@ -277,6 +277,17 @@ backend/
 │   │   ├── message.py       # Message models and types
 │   │   ├── exceptions.py    # Communication-specific exceptions
 │   │   └── __init__.py      # Communication module exports
+│   ├── events/              # Event system for business event handling
+│   │   ├── base_event.py    # Base event classes and interfaces
+│   │   ├── event_types.py   # Typed event models for JAWIS events
+│   │   ├── dispatcher.py    # Event dispatcher and routing
+│   │   ├── handlers.py      # Event handlers for processing events
+│   │   └── __init__.py      # Event module exports
+│   ├── jawis/               # JAWIS integration (API client and webhooks)
+│   │   ├── client.py        # JAWIS API client for fetching business data
+│   │   ├── webhook.py       # Webhook handler for JAWIS events
+│   │   ├── schemas.py       # Pydantic schemas for JAWIS data
+│   │   └── __init__.py      # JAWIS module exports
 │   ├── api/                 # Route handlers per module
 │   ├── models/              # Pydantic/MongoEngine models
 │   ├── services/            # Business logic layer
@@ -562,6 +573,7 @@ frontend/src/
 - Backend: Core foundation (config, database, core) - Sprint 1
 - Backend: Provider abstraction layer (WhatsApp/Email providers) - Sprint 2
 - Backend: Communication Engine (message orchestration, channel management) - Sprint 3
+- Backend: Event System (business event handling, JAWIS integration) - Sprint 4
 
 ### In Progress
 - Frontend architecture refactor per ARCHITECTURE.md (removing Contacts, Automation, renaming routes)
@@ -687,6 +699,7 @@ frontend/src/
 | 2026-07-03 | Backend | Sprint 1: Create backend foundation | `backend/app/config/settings.py`, `backend/app/config/logging.py`, `backend/app/database/base.py`, `backend/app/database/database.py`, `backend/app/database/session.py`, `backend/app/core/base_repository.py`, `backend/app/core/base_service.py`, `backend/app/core/dependencies.py`, `backend/app/main.py`, `backend/requirements.txt`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added core backend foundation with Clean Architecture, Repository Pattern, and Service Layer |
 | 2026-07-02 | Backend | Sprint 2: Create provider abstraction layer | `backend/app/providers/base/communication_provider.py`, `backend/app/providers/base/whatsapp_provider.py`, `backend/app/providers/base/email_provider.py`, `backend/app/providers/registry/provider_registry.py`, `backend/app/providers/meta/meta_provider.py`, `backend/app/providers/resend/resend_provider.py`, `backend/app/providers/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added provider abstraction layer enabling multiple WhatsApp/Email providers without changing business logic. Implemented MetaProvider (WhatsApp) and ResendProvider (Email) with dependency injection via ProviderRegistry |
 | 2026-07-02 | Backend | Sprint 3: Create Communication Engine | `backend/app/communication/communication_engine.py`, `backend/app/communication/channel.py`, `backend/app/communication/message.py`, `backend/app/communication/exceptions.py`, `backend/app/communication/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added Communication Engine as central orchestrator for message sending. Uses ProviderRegistry for dependency injection. Handles channel management, message validation, and send orchestration. Never calls providers directly. |
+| 2026-07-02 | Backend | Sprint 4: Create Event System | `backend/app/events/base_event.py`, `backend/app/events/event_types.py`, `backend/app/events/dispatcher.py`, `backend/app/events/handlers.py`, `backend/app/events/__init__.py`, `backend/app/jawis/client.py`, `backend/app/jawis/webhook.py`, `backend/app/jawis/schemas.py`, `backend/app/jawis/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added Event System for handling business events from JAWIS. Includes typed event models, event dispatcher, JAWIS API client, and webhook handler. Communication Engine can now subscribe to business events. |
 
 ---
 
