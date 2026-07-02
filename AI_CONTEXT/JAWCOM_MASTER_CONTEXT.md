@@ -271,6 +271,12 @@ backend/
 │   │   ├── resend/          # Resend email provider
 │   │   │   └── resend_provider.py
 │   │   └── __init__.py      # Provider module exports
+│   ├── communication/       # Communication engine and message orchestration
+│   │   ├── communication_engine.py  # Central message sending orchestrator
+│   │   ├── channel.py       # Channel definitions and management
+│   │   ├── message.py       # Message models and types
+│   │   ├── exceptions.py    # Communication-specific exceptions
+│   │   └── __init__.py      # Communication module exports
 │   ├── api/                 # Route handlers per module
 │   ├── models/              # Pydantic/MongoEngine models
 │   ├── services/            # Business logic layer
@@ -555,6 +561,7 @@ frontend/src/
 - Backend: FastAPI scaffold with MongoDB connection
 - Backend: Core foundation (config, database, core) - Sprint 1
 - Backend: Provider abstraction layer (WhatsApp/Email providers) - Sprint 2
+- Backend: Communication Engine (message orchestration, channel management) - Sprint 3
 
 ### In Progress
 - Frontend architecture refactor per ARCHITECTURE.md (removing Contacts, Automation, renaming routes)
@@ -586,8 +593,6 @@ frontend/src/
 - Architectural cleanup: remove old pages (Contacts, Automation, AutomationBuilder), update routes
 - Wire frontend services to placeholder backend endpoints
 - Define API contracts for all modules (OpenAPI spec)
-- Backend foundation (config, database, core) - Sprint 1
-- Provider abstraction layer - Sprint 2
 
 ### Next Sprint
 - Build JAWIS sync client (read-only API client + webhook receiver)
@@ -681,6 +686,7 @@ frontend/src/
 | 2026-07-02 | ALL | Initial master context document created | `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | N/A — foundation document |
 | 2026-07-03 | Backend | Sprint 1: Create backend foundation | `backend/app/config/settings.py`, `backend/app/config/logging.py`, `backend/app/database/base.py`, `backend/app/database/database.py`, `backend/app/database/session.py`, `backend/app/core/base_repository.py`, `backend/app/core/base_service.py`, `backend/app/core/dependencies.py`, `backend/app/main.py`, `backend/requirements.txt`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added core backend foundation with Clean Architecture, Repository Pattern, and Service Layer |
 | 2026-07-02 | Backend | Sprint 2: Create provider abstraction layer | `backend/app/providers/base/communication_provider.py`, `backend/app/providers/base/whatsapp_provider.py`, `backend/app/providers/base/email_provider.py`, `backend/app/providers/registry/provider_registry.py`, `backend/app/providers/meta/meta_provider.py`, `backend/app/providers/resend/resend_provider.py`, `backend/app/providers/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added provider abstraction layer enabling multiple WhatsApp/Email providers without changing business logic. Implemented MetaProvider (WhatsApp) and ResendProvider (Email) with dependency injection via ProviderRegistry |
+| 2026-07-02 | Backend | Sprint 3: Create Communication Engine | `backend/app/communication/communication_engine.py`, `backend/app/communication/channel.py`, `backend/app/communication/message.py`, `backend/app/communication/exceptions.py`, `backend/app/communication/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added Communication Engine as central orchestrator for message sending. Uses ProviderRegistry for dependency injection. Handles channel management, message validation, and send orchestration. Never calls providers directly. |
 
 ---
 
