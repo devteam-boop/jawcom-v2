@@ -1,0 +1,96 @@
+"""Application settings loaded from environment variables / .env file."""
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal, Optional
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+class Settings(BaseSettings):
+    """Central configuration for the JawCom backend.
+
+    Values are read from environment variables, falling back to the
+    backend `.env` file, then to the defaults declared here.
+    """
+
+    # Application
+    PROJECT_NAME: str = "JawCom Backend"
+    VERSION: str = "0.1.0"
+    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+    DEBUG: bool = False
+    API_PREFIX: str = "/api"
+
+    # Database (PostgreSQL / Supabase, async via asyncpg)
+    DATABASE_URL: Optional[str] = Field(
+        default=None,
+        description="Async PostgreSQL DSN, e.g. postgresql+asyncpg://user:pass@host:5432/db",
+    )
+    DATABASE_ECHO: bool = False
+    DATABASE_POOL_SIZE: int = 5
+    DATABASE_MAX_OVERFLOW: int = 10
+    DATABASE_POOL_TIMEOUT: int = 30
+
+    # Redis (reserved for future workers / caching)
+    REDIS_URL: Optional[str] = None
+
+    # Logging
+    LOG_LEVEL: str = "INFO"
+    LOG_JSON: bool = False
+
+    # CORS
+    CORS_ORIGINS: str = "*"
+    CORS_ALLOW_CREDENTIALS: bool = True
+    CORS_ALLOW_METHODS: str = "*"
+    CORS_ALLOW_HEADERS: str = "*"
+
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @field_validator("DATABASE_URL", "REDIS_URL", mode="before")
+    @classmethod
+    def _empty_string_as_none(cls, value: Optional[str]) -> Optional[str]:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _normalize_database_url(cls, value: Optional[str]) -> Optional[str]:
+        """Ensure the async asyncpg driver is used for plain postgres DSNs."""
+        if value and value.startswith(("postgres://", "postgresql://")):
+            scheme, _, rest = value.partition("://")
+            return f"postgresql+asyncpg://{rest}"
+        return value
+
+    @staticmethod
+    def _split_csv(value: str) -> list[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return self._split_csv(self.CORS_ORIGINS)
+
+    @property
+    def cors_allow_methods(self) -> list[str]:
+        return self._split_csv(self.CORS_ALLOW_METHODS)
+
+    @property
+    def cors_allow_headers(self) -> list[str]:
+        return self._split_csv(self.CORS_ALLOW_HEADERS)
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT == "production"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return the cached application settings instance."""
+    return Settings()
