@@ -259,10 +259,21 @@ backend/
 │   │   ├── base.py          # Base model
 │   │   ├── database.py      # Database connection
 │   │   └── session.py       # Session management
+│   ├── providers/           # Provider abstraction layer
+│   │   ├── base/            # Abstract provider interfaces
+│   │   │   ├── communication_provider.py
+│   │   │   ├── whatsapp_provider.py
+│   │   │   └── email_provider.py
+│   │   ├── registry/        # Provider registry and dependency injection
+│   │   │   └── provider_registry.py
+│   │   ├── meta/            # Meta WhatsApp provider
+│   │   │   └── meta_provider.py
+│   │   ├── resend/          # Resend email provider
+│   │   │   └── resend_provider.py
+│   │   └── __init__.py      # Provider module exports
 │   ├── api/                 # Route handlers per module
 │   ├── models/              # Pydantic/MongoEngine models
 │   ├── services/            # Business logic layer
-│   ├── channels/            # Channel abstraction (WhatsApp, Email)
 │   ├── engine/              # Flow execution engine
 │   └── workers/             # Celery task definitions
 ├── tests/
