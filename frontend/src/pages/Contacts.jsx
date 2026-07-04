@@ -1,12 +1,3 @@
-<<<<<<< HEAD
-import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-
-export default function Contacts() {
-  const navigate = useNavigate();
-  useEffect(() => { navigate("/", { replace: true }); }, [navigate]);
-  return null;
-=======
 import { useMemo, useState } from "react";
 import PageHeader from "@/components/PageHeader";
 import SearchBar from "@/components/SearchBar";
@@ -423,5 +414,4 @@ function MiniStat({ label, value }) {
       <div className="mt-0.5 font-mono text-sm font-semibold">{value}</div>
     </div>
   );
->>>>>>> 321075ad65aa3df54916ae638505753705e9661b
 }

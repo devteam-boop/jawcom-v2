@@ -28,7 +28,11 @@ export default function RunningInstances({ instances = [] }) {
     {
       key: "currentNode",
       label: "Current Node",
-      render: (r) => <span className="text-xs text-muted-foreground">{r.current_node_id || "—"}</span>,
+      render: (r) => (
+        <span className="text-xs text-muted-foreground">
+          {r.status === "running" ? "In progress" : r.status === "completed" ? "Done" : r.status === "waiting" ? "Waiting" : "—"}
+        </span>
+      ),
     },
     {
       key: "started",

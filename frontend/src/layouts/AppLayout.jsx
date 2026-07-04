@@ -19,7 +19,7 @@ export default function AppLayout() {
           onToggleSidebar={() => setCollapsed((c) => !c)}
           onOpenMobile={() => setMobileOpen(true)}
         />
-        <main className="flex-1 overflow-y-auto scrollbar-thin" data-testid="main-content">
+        <main className="flex-1" data-testid="main-content">
           <Outlet />
         </main>
       </div>

@@ -1,12 +1,3 @@
-<<<<<<< HEAD
-export { inboxService } from "./inbox";
-export { journeyService } from "./journeys";
-export { campaignService } from "./campaigns";
-export { templateService } from "./templates";
-export { reportService } from "./reports";
-export { integrationService } from "./integrations";
-export { jawisService } from "./jawis";
-=======
 // Empty typed placeholder services. Wire these to a real backend later.
 // All functions return promises with hardcoded dummy data so the call sites
 // can be swapped to fetch/axios without changing signatures.
@@ -51,4 +42,3 @@ export const assistantService = {
   suggestions: async () => [],
   ask: async (_prompt) => ({ ok: true, text: "" }),
 };
->>>>>>> 321075ad65aa3df54916ae638505753705e9661b

@@ -5,12 +5,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import StageMapping from "./StageMapping";
+import TriggerConfiguration from "./TriggerConfiguration";
 
-export default function JourneySettings({ journey, mappings = [] }) {
+export default function JourneySettings({ journey, mappings = [], onRefreshMappings }) {
   return (
     <div className="space-y-6">
-      <StageMapping mappings={mappings} journeyName={journey?.name} />
+      <TriggerConfiguration
+        journeyId={journey?.id}
+        mappings={mappings}
+        onRefresh={onRefreshMappings}
+      />
 
       <Separator />
 

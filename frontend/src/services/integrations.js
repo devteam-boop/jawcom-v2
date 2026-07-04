@@ -1,28 +1,8 @@
-const BASE = "/api/integrations";
+import { api } from "./apiClient";
 
 export const integrationService = {
-  list: async () => {
-    const res = await fetch(BASE);
-    if (!res.ok) throw new Error("Failed to list integrations");
-    return res.json();
-  },
-  get: async (id) => {
-    const res = await fetch(`${BASE}/${id}`);
-    if (!res.ok) throw new Error("Failed to get integration");
-    return res.json();
-  },
-  connect: async (id, config) => {
-    const res = await fetch(`${BASE}/${id}/connect`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(config),
-    });
-    if (!res.ok) throw new Error("Failed to connect integration");
-    return res.json();
-  },
-  disconnect: async (id) => {
-    const res = await fetch(`${BASE}/${id}/disconnect`, { method: "POST" });
-    if (!res.ok) throw new Error("Failed to disconnect integration");
-    return res.json();
-  },
+  list: async () => api.get("/api/integrations"),
+  get: async (id) => api.get(`/api/integrations/${id}`),
+  connect: async (id, config) => api.post(`/api/integrations/${id}/connect`, config),
+  disconnect: async (id) => api.post(`/api/integrations/${id}/disconnect`),
 };

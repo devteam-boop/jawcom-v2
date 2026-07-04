@@ -1,11 +1,12 @@
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
 import DataTable from "@/components/DataTable";
 import StatusBadge from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { Plus, Zap } from "lucide-react";
+import { getLeadStages } from "@/services/stageProvider";
+import { Plus, Zap, Target } from "lucide-react";
 
 const FILTER_TABS = [
   { label: "All", value: "all" },
@@ -16,6 +17,15 @@ const FILTER_TABS = [
 
 export default function JourneyList({ journeys, search, onSearchChange, filter, onFilterChange, onCreate }) {
   const navigate = useNavigate();
+  const [stageLabels, setStageLabels] = useState({});
+
+  useEffect(() => {
+    getLeadStages().then((stages) => {
+      const map = {};
+      stages.forEach((s) => { map[s.value] = s.label; });
+      setStageLabels(map);
+    });
+  }, []);
 
   const rows = useMemo(() => {
     return journeys.filter((j) => {
@@ -43,13 +53,21 @@ export default function JourneyList({ journeys, search, onSearchChange, filter, 
     },
     { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} /> },
     {
-      key: "stageMapping",
-      label: "Stage Mapping",
-      render: (r) => (
-        <span className="text-xs text-muted-foreground">
-          {r.stageMappings?.map((s) => s.stageLabel).join(", ") || "—"}
-        </span>
-      ),
+      key: "trigger",
+      label: "Trigger",
+      render: (r) => {
+        const mapping = r.stageMappings?.[0];
+        if (!mapping) {
+          return <span className="text-xs text-muted-foreground">Not configured</span>;
+        }
+        const label = stageLabels[mapping.stage_key] || mapping.stage_key;
+        return (
+          <span className="inline-flex items-center gap-1 text-xs text-foreground">
+            <Target className="h-3 w-3 text-primary" />
+            {label}
+          </span>
+        );
+      },
     },
     {
       key: "running",

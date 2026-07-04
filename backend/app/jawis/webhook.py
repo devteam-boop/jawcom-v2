@@ -1,6 +1,6 @@
 """Webhook handler for receiving events from JAWIS."""
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
 from fastapi import HTTPException

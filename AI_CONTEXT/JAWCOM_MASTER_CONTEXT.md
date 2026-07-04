@@ -28,16 +28,21 @@ To become the standard Communication OS that sits alongside any Business OS, dec
 - Knowledge base / RAG (post-V1).
 
 ### Current Version
-v0.1.0 — Frontend prototype with dummy data. Backend scaffold only.
+v0.1.0 — Frontend prototype with dummy data. Backend with service-layer modules and domain models.
 
 ### Development Status
 - **Frontend static UI**: ~70% complete (all pages, components, routing, theme)
 - **Frontend API wiring**: ~10% complete (service layer defined, not connected)
-- **Backend product APIs**: ~5% complete (only status-check scaffold exists)
-- **Database domain model**: ~5% complete
+- **Backend foundation (config/database/core)**: ~100% complete
+- **Backend provider abstraction (WhatsApp/Email)**: ~100% complete (abstract + Meta implementation)
+- **Backend communication engine**: ~100% complete (engine + mock provider)
+- **Backend event system + JAWIS integration**: ~100% complete
+- **Backend domain models (SQLAlchemy)**: ~80% complete (11 tables defined)
+- **Backend business modules (Journeys, Flows, Templates, Stage Mapping, Runtime)**: ~70% complete (services/schemas/validators, no API routes)
+- **Backend product API routes**: ~5% complete (only /health endpoint)
 - **Auth/Security**: 0% complete
-- **Integrations (WhatsApp/Email)**: 0% complete
-- **Overall product**: ~28% complete
+- **Integrations (WhatsApp/Email real API calls)**: 0% complete (placeholder implementations)
+- **Overall product**: ~35% complete
 
 ---
 
@@ -209,23 +214,23 @@ Channel → Webhook → JawCom: Delivery receipts, inbound messages
 
 ## 6. Database Ownership
 
-### Collections owned by JawCom (MongoDB)
-| Collection | Purpose |
-|---|---|
-| `stage_mappings` | Stage key → Journey mapping (stage_key is plain string, not FK to JAWIS) |
-| `journeys` | Journey definitions (name, status, settings) |
-| `flow_definitions` | Flow JSON blob (one per journey, versioned) |
-| `templates` | Reusable message templates |
-| `template_usages` | Tracking template references across journeys/campaigns |
-| `running_instances` | Active per-lead journey state machines |
-| `instance_events` | Immutable audit log for every instance state change |
-| `conversations` | Inbox conversation threads |
-| `messages` | Individual messages within conversations |
-| `campaigns` | Broadcast campaign definitions |
-| `campaign_recipients` | Per-recipient campaign delivery status |
-| `channels` | Channel connection configs (WhatsApp, Email) |
-| `workspaces` | Multi-tenant workspace configuration |
-| `users` | Workspace users and roles |
+### Tables owned by JawCom (PostgreSQL via SQLAlchemy 2.0 Async)
+| Table | Purpose | Status |
+|---|---|---|
+| `workspaces` | Multi-tenant workspace configuration | Implemented |
+| `users` | Workspace users and roles | Implemented |
+| `journeys` | Journey definitions (name, status, settings) | Implemented |
+| `flow_definitions` | Flow JSON blob (one per journey) | Implemented |
+| `templates` | Reusable message templates | Implemented |
+| `stage_mappings` | Stage key → Journey mapping | Implemented |
+| `running_journey_instances` | Active per-lead journey state machines | Implemented |
+| `conversations` | Inbox conversation threads | Implemented |
+| `messages` | Individual messages within conversations | Implemented |
+| `campaigns` | Broadcast campaign definitions | Implemented |
+| `campaign_recipients` | Per-recipient campaign delivery status | Implemented |
+| `instance_events` | Immutable audit log | TODO (not yet modeled) |
+| `template_usages` | Tracking template references | TODO (not yet modeled) |
+| `channels` | Channel connection configs | TODO (not yet modeled) |
 
 ### Must NEVER be duplicated in JawCom
 - Lead name, email, phone
@@ -247,65 +252,112 @@ Channel → Webhook → JawCom: Delivery receipts, inbound messages
 ```
 backend/
 ├── app/
-│   ├── main.py              # FastAPI app factory
+│   ├── main.py              # FastAPI app entry point, /health endpoint
+│   ├── pipeline.py          # Event processing pipeline
 │   ├── config/
-│   │   ├── settings.py      # Application settings
+│   │   ├── __init__.py      # Settings export
+│   │   ├── settings.py      # Pydantic settings (PostgreSQL async)
 │   │   └── logging.py       # Logging configuration
 │   ├── core/
-│   │   ├── base_repository.py  # Base repository class
-│   │   ├── base_service.py     # Base service class
-│   │   └── dependencies.py     # FastAPI dependencies
+│   │   ├── __init__.py
+│   │   ├── base_repository.py  # Base repository with CRUD
+│   │   ├── base_service.py     # Abstract base service
+│   │   └── dependencies.py     # FastAPI DB session dependency
 │   ├── database/
-│   │   ├── base.py          # Base model
-│   │   ├── database.py      # Database connection
-│   │   └── session.py       # Session management
-│   ├── providers/           # Provider abstraction layer
-│   │   ├── base/            # Abstract provider interfaces
-│   │   │   ├── communication_provider.py
-│   │   │   ├── whatsapp_provider.py
-│   │   │   └── email_provider.py
-│   │   ├── registry/        # Provider registry and dependency injection
-│   │   │   └── provider_registry.py
-│   │   ├── meta/            # Meta WhatsApp provider
-│   │   │   └── meta_provider.py
-│   │   ├── resend/          # Resend email provider
-│   │   │   └── resend_provider.py
-│   │   └── __init__.py      # Provider module exports
-│   ├── communication/       # Communication engine and message orchestration
-│   │   ├── communication_engine.py  # Central message sending orchestrator
-│   │   ├── channel.py       # Channel definitions and management
-│   │   ├── message.py       # Message models and types
-│   │   ├── exceptions.py    # Communication-specific exceptions
-│   │   └── __init__.py      # Communication module exports
-│   ├── events/              # Event system for business event handling
-│   │   ├── base_event.py    # Base event classes and interfaces
-│   │   ├── event_types.py   # Typed event models for JAWIS events
-│   │   ├── dispatcher.py    # Event dispatcher and routing
-│   │   ├── handlers.py      # Event handlers for processing events
-│   │   └── __init__.py      # Event module exports
-│   ├── jawis/               # JAWIS integration (API client and webhooks)
-│   │   ├── client.py        # JAWIS API client for fetching business data
-│   │   ├── webhook.py       # Webhook handler for JAWIS events
-│   │   ├── schemas.py       # Pydantic schemas for JAWIS data
-│   │   └── __init__.py      # JAWIS module exports
-│   ├── api/                 # Route handlers per module
-│   ├── models/              # Pydantic/MongoEngine models
-│   ├── services/            # Business logic layer
-│   ├── engine/              # Flow execution engine
-│   └── workers/             # Celery task definitions
-├── tests/
-├── requirements.txt
-└── Dockerfile
+│   │   ├── base.py          # SQLAlchemy DeclarativeBase
+│   │   ├── database.py      # Async engine factory
+│   │   └── session.py       # Async session maker + init/close
+│   ├── providers/           # Provider abstraction layer (Sprint 2)
+│   │   ├── __init__.py      # Module exports
+│   │   ├── base/
+│   │   │   ├── communication_provider.py  # Abstract base class
+│   │   │   ├── whatsapp_provider.py       # Abstract WhatsApp provider
+│   │   │   └── email_provider.py          # Abstract Email provider
+│   │   ├── registry/
+│   │   │   └── provider_registry.py       # DI container for providers
+│   │   └── meta/
+│   │       └── meta_provider.py           # Meta WhatsApp (placeholder)
+│   │   # NOTE: ResendProvider referenced in __init__.py but file missing
+│   ├── communication/       # Communication engine (Sprint 3)
+│   │   ├── engine.py        # CommunicationEngine orchestrator
+│   │   ├── providers.py     # Mock WhatsApp provider (local)
+│   │   └── __init__.py
+│   ├── events/              # Event system (Sprint 4)
+│   │   ├── base_event.py    # BaseEvent + EventHandler ABCs
+│   │   ├── event_types.py   # Typed JAWIS events (LeadCreated, etc.)
+│   │   ├── dispatcher.py    # EventDispatcher with queuing + retry
+│   │   ├── handlers.py      # CommunicationEventHandler + Logging + Metrics
+│   │   └── __init__.py
+│   ├── jawis/               # JAWIS integration (Sprint 4)
+│   │   ├── client.py        # JawisClient (read-only API + caching)
+│   │   ├── webhook.py       # JawisWebhookHandler
+│   │   ├── schemas.py       # Pydantic schemas
+│   │   └── __init__.py
+│   ├── journeys/            # Journey Engine business module
+│   │   ├── services.py      # JourneyService CRUD
+│   │   ├── schemas.py       # Pydantic schemas
+│   │   ├── validators.py    # JourneyValidator
+│   │   ├── journey_manager.py # Activate/pause/archive logic
+│   │   ├── exceptions.py
+│   │   └── __init__.py
+│   ├── flows/               # Flow Definition Engine business module
+│   │   ├── services.py      # FlowService CRUD + publish
+│   │   ├── schemas.py       # Pydantic schemas + node types
+│   │   ├── validators.py    # FlowValidator (circular refs, orphans)
+│   │   ├── flow_builder.py  # FlowBuilder helper
+│   │   ├── exceptions.py
+│   │   └── __init__.py
+│   ├── templates/           # Template Engine business module
+│   │   ├── services.py      # TemplateService CRUD + render
+│   │   ├── schemas.py       # Pydantic schemas
+│   │   ├── validators.py    # TemplateValidator (variables, syntax)
+│   │   ├── renderer.py      # TemplateRenderer (Jinja2)
+│   │   ├── exceptions.py
+│   │   └── __init__.py
+│   ├── stage_mapping/       # Stage Mapping Engine business module
+│   │   ├── services.py      # StageMappingService CRUD
+│   │   ├── schemas.py       # Pydantic schemas
+│   │   ├── validators.py    # StageMappingValidator
+│   │   ├── mapping_manager.py # Enable/disable + query logic
+│   │   ├── exceptions.py
+│   │   └── __init__.py
+│   ├── runtime/             # Running Journey Instance Engine
+│   │   ├── services.py      # RunningInstanceService CRUD
+│   │   ├── schemas.py       # Pydantic schemas + status enum
+│   │   ├── validators.py    # RunningInstanceValidator
+│   │   ├── instance_manager.py # Pause/resume/cancel/complete
+│   │   ├── exceptions.py
+│   │   └── __init__.py
+│   ├── models/              # SQLAlchemy models (11 tables)
+│   │   ├── base.py          # BaseModel with UUID PK, timestamps
+│   │   ├── workspace.py     # Workspace
+│   │   ├── user.py          # User + UserRole
+│   │   ├── journey.py       # Journey + JourneyStatus
+│   │   ├── template.py      # Template + TemplateChannel/Status
+│   │   ├── flow_definition.py # FlowDefinition (JSON blob)
+│   │   ├── stage_mapping.py # StageMapping
+│   │   ├── running_journey_instance.py # RunningJourneyInstance + InstanceStatus
+│   │   ├── conversation.py  # Conversation + ConversationChannel
+│   │   ├── message.py       # Message + MessageDirection/Status
+│   │   ├── campaign.py      # Campaign + CampaignStatus
+│   │   ├── campaign_recipient.py # CampaignRecipient + RecipientStatus
+│   │   └── __init__.py      # All model exports
+│   └── workers/             # Empty (future Celery tasks)
+├── server.py                # Entry point (merge conflict exists)
+├── requirements.txt         # FastAPI, SQLAlchemy 2.0 async, asyncpg
+├── pytest.ini
+└── .env                     # Legacy MongoDB config (needs update for PostgreSQL)
 ```
 
 ### FastAPI
-- Single `main.py` with `APIRouter(prefix="/api")`.
-- Currently only has demo endpoints: `GET /api/`, `POST /api/status`, `GET /api/status`.
+- Single `main.py` with `GET /health` endpoint.
 - CORS configured via `CORS_ORIGINS` env var.
-- Logging configured via `logging.basicConfig`.
+- Logging configured via `app/config/logging.py`.
+- Database: PostgreSQL with SQLAlchemy 2.0 async + asyncpg.
+- No product API routes implemented yet (services exist but no endpoints).
 
 ### Workers
-- Not yet implemented.
+- Not yet implemented. Empty `backend/app/workers/` directory.
 - Planned: Celery workers for async flow execution, campaign sending, webhook delivery.
 
 ### Redis
@@ -316,42 +368,19 @@ backend/
 - Not yet implemented.
 - Planned: Background task queue for flow node execution, campaign batch sends, scheduled jobs.
 
-### Supabase
-- Not used. MongoDB is the database.
-- No current plans to migrate.
+### Database
+- PostgreSQL via SQLAlchemy 2.0 Async + asyncpg.
+- 11 tables defined: workspaces, users, journeys, flow_definitions, templates, stage_mappings, running_journey_instances, conversations, messages, campaigns, campaign_recipients.
+- Legacy `.env` still has MongoDB config. Settings class expects `DATABASE_URL` for PostgreSQL.
 
 ### Cloudinary
 - Not yet integrated.
 - Planned: Template media assets (images, PDFs), inbox attachments.
 
 ### Webhooks
-- Inbound: JAWIS stage change events, WhatsApp delivery receipts, Email delivery receipts.
-- Outbound: Notify JAWIS of message delivery/read events.
-- Not yet implemented beyond static UI placeholders.
-
-### Future backend structure
-```
-backend/
-├── app/
-│   ├── main.py              # FastAPI app factory
-│   ├── config.py            # Settings/env management
-│   ├── api/                 # Route handlers per module
-│   │   ├── journeys.py
-│   │   ├── inbox.py
-│   │   ├── campaigns.py
-│   │   ├── templates.py
-│   │   ├── reports.py
-│   │   ├── integrations.py
-│   │   └── webhooks.py
-│   ├── models/              # Pydantic/MongoEngine models
-│   ├── services/            # Business logic layer
-│   ├── channels/            # Channel abstraction (WhatsApp, Email)
-│   ├── engine/              # Flow execution engine
-│   └── workers/             # Celery task definitions
-├── tests/
-├── requirements.txt
-└── Dockerfile
-```
+- Inbound: JAWIS stage change events handled via `jawis/webhook.py` → `events/dispatcher.py`.
+- Outbound: Notify JAWIS of message delivery/read events — not yet implemented.
+- JAWIS webhook handler exists with batch processing and signature validation placeholder.
 
 ---
 
@@ -569,32 +598,42 @@ frontend/src/
 - Frontend: Flow Builder with visual canvas, node palette, properties panel
 - Frontend: JAWIS context panel (read-only lead data display)
 - Frontend: Service layer placeholder structure
-- Backend: FastAPI scaffold with MongoDB connection
-- Backend: Core foundation (config, database, core) - Sprint 1
-- Backend: Provider abstraction layer (WhatsApp/Email providers) - Sprint 2
-- Backend: Communication Engine (message orchestration, channel management) - Sprint 3
-- Backend: Event System (business event handling, JAWIS integration) - Sprint 4
+- Backend: Core foundation (config, database, core) — Sprint 1
+- Backend: Provider abstraction layer (WhatsApp/Email providers) — Sprint 2
+- Backend: Communication Engine (message orchestration) — Sprint 3
+- Backend: Event System (business event handling, JAWIS integration) — Sprint 4
+- Backend: SQLAlchemy domain models (11 tables) — Sprint 5
+- Backend: Journey Engine (JourneyService, JourneyManager, validators) — Sprint 5
+- Backend: Flow Definition Engine (FlowService, FlowBuilder, validators) — Sprint 5
+- Backend: Template Engine (TemplateService, TemplateRenderer, validators) — Sprint 5
+- Backend: Stage Mapping Engine (StageMappingService, MappingManager) — Sprint 5
+- Backend: Running Instance Engine (RunningInstanceService, InstanceManager) — Sprint 5
+- Backend: Pipeline module for event processing — Sprint 5
 
 ### In Progress
 - Frontend architecture refactor per ARCHITECTURE.md (removing Contacts, Automation, renaming routes)
 - Frontend service layer wiring to placeholder backend endpoints
 - Define API contracts for all modules (OpenAPI spec)
+- Fix merge conflict in `backend/server.py`
+- Fix missing `backend/app/providers/resend/resend_provider.py` (imported but missing)
+- Migrate `.env` from legacy MongoDB config to PostgreSQL `DATABASE_URL`
 
 ### Pending
-- Backend product APIs for every module
+- Backend product API routes (all services need HTTP endpoints)
 - Flow execution engine (graph walker for Running Instances)
-- Channel integration (WhatsApp Meta Cloud API, Email SMTP/Gmail)
-- Inbound webhook handlers
+- Running Instance state machine wiring (exists as service, not wired to execution)
+- Channel real integration (WhatsApp Meta Cloud API, Email SMTP/Gmail)
 - Campaign execution engine
-- Running Instance state machine
-- Database domain models and indexes
-- Retry policy, business hours, rate limiting
 - Auth (JWT) and RBAC
+- Retry policy, business hours, rate limiting enforcement
 - Real analytics pipeline
+- Workers/Celery for async tasks
+- `instance_events`, `template_usages`, `channels` tables
+- Webhook signature validation
 
 ### Blocked
 - Real inbox send/receive — blocked by channel integration
-- Flow execution — blocked by backend domain models
+- Flow execution — blocked by flow execution engine
 - Campaign execution — blocked by audience filtering from JAWIS
 
 ---
@@ -602,26 +641,28 @@ frontend/src/
 ## 12. Development Roadmap
 
 ### Current Sprint
-- Architectural cleanup: remove old pages (Contacts, Automation, AutomationBuilder), update routes
+- Resolve merge conflict in `backend/server.py` (old MongoDB scaffold vs new app.main)
+- Create missing `backend/app/providers/resend/resend_provider.py`
+- Update `.env` for PostgreSQL `DATABASE_URL`
 - Wire frontend services to placeholder backend endpoints
 - Define API contracts for all modules (OpenAPI spec)
 
 ### Next Sprint
-- Build JAWIS sync client (read-only API client + webhook receiver)
-- Stage Mapping CRUD (backend + frontend)
-- Journey CRUD (backend + frontend)
-- Flow Definition storage (JSON blob)
-- Running Instance state machine
+- Build backend product API routes for all business modules (journeys, flows, templates, stage_mapping, runtime)
+- Connect service layer to FastAPI route handlers
+- Build Flow Execution Engine (graph walker with node executors)
+- Wire events/dispatcher to trigger journey instances on JAWIS events
 
 ### Future Features
-- Flow Execution Engine (graph walker with node executors)
-- WhatsApp Channel (Meta Cloud API)
-- Email Channel (SMTP / Gmail API)
+- WhatsApp Channel (Meta Cloud API — real integration)
+- Email Channel (SMTP / Gmail API — real integration)
 - Campaign Execution Engine
+- Running Instance state machine wiring
 - Real-time inbox via WebSocket
 - Reports analytics pipeline
 - Retry policy, business hours, rate limiting
-- RBAC and workspace management
+- Auth (JWT) and RBAC
+- Workers/Celery for async tasks
 - Testing (unit + integration + E2E)
 - Deployment configs (Docker, CI/CD)
 
@@ -700,6 +741,14 @@ frontend/src/
 | 2026-07-02 | Backend | Sprint 2: Create provider abstraction layer | `backend/app/providers/base/communication_provider.py`, `backend/app/providers/base/whatsapp_provider.py`, `backend/app/providers/base/email_provider.py`, `backend/app/providers/registry/provider_registry.py`, `backend/app/providers/meta/meta_provider.py`, `backend/app/providers/resend/resend_provider.py`, `backend/app/providers/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added provider abstraction layer enabling multiple WhatsApp/Email providers without changing business logic. Implemented MetaProvider (WhatsApp) and ResendProvider (Email) with dependency injection via ProviderRegistry |
 | 2026-07-02 | Backend | Sprint 3: Create Communication Engine | `backend/app/communication/communication_engine.py`, `backend/app/communication/channel.py`, `backend/app/communication/message.py`, `backend/app/communication/exceptions.py`, `backend/app/communication/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added Communication Engine as central orchestrator for message sending. Uses ProviderRegistry for dependency injection. Handles channel management, message validation, and send orchestration. Never calls providers directly. |
 | 2026-07-02 | Backend | Sprint 4: Create Event System | `backend/app/events/base_event.py`, `backend/app/events/event_types.py`, `backend/app/events/dispatcher.py`, `backend/app/events/handlers.py`, `backend/app/events/__init__.py`, `backend/app/jawis/client.py`, `backend/app/jawis/webhook.py`, `backend/app/jawis/schemas.py`, `backend/app/jawis/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added Event System for handling business events from JAWIS. Includes typed event models, event dispatcher, JAWIS API client, and webhook handler. Communication Engine can now subscribe to business events. |
+| 2026-07-03 | Backend | Sprint 5: Create business domain models (SQLAlchemy) | `backend/app/models/base.py`, `backend/app/models/workspace.py`, `backend/app/models/user.py`, `backend/app/models/journey.py`, `backend/app/models/template.py`, `backend/app/models/flow_definition.py`, `backend/app/models/stage_mapping.py`, `backend/app/models/running_journey_instance.py`, `backend/app/models/conversation.py`, `backend/app/models/message.py`, `backend/app/models/campaign.py`, `backend/app/models/campaign_recipient.py`, `backend/app/models/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Created 11 SQLAlchemy domain models covering all JawCom data domains. PostgreSQL UUID primary keys, proper relationships, enums. |
+| 2026-07-03 | Backend | Sprint 5: Create Journey Engine | `backend/app/journeys/services.py`, `backend/app/journeys/schemas.py`, `backend/app/journeys/validators.py`, `backend/app/journeys/journey_manager.py`, `backend/app/journeys/exceptions.py`, `backend/app/journeys/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Journey Engine with CRUD service, state management (activate/pause/archive), validation, and trigger-based lookup. |
+| 2026-07-03 | Backend | Sprint 5: Create Flow Definition Engine | `backend/app/flows/services.py`, `backend/app/flows/schemas.py`, `backend/app/flows/validators.py`, `backend/app/flows/flow_builder.py`, `backend/app/flows/exceptions.py`, `backend/app/flows/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Flow Definition Engine with CRUD, publish/version management, FlowBuilder helper, validation (circular references, orphan nodes, template references). |
+| 2026-07-03 | Backend | Sprint 5: Create Template Engine | `backend/app/templates/services.py`, `backend/app/templates/schemas.py`, `backend/app/templates/validators.py`, `backend/app/templates/renderer.py`, `backend/app/templates/exceptions.py`, `backend/app/templates/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Template Engine with CRUD, Jinja2-based rendering, variable extraction, email/WhatsApp validation. |
+| 2026-07-03 | Backend | Sprint 5: Create Stage Mapping Engine | `backend/app/stage_mapping/services.py`, `backend/app/stage_mapping/schemas.py`, `backend/app/stage_mapping/validators.py`, `backend/app/stage_mapping/mapping_manager.py`, `backend/app/stage_mapping/exceptions.py`, `backend/app/stage_mapping/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Stage Mapping Engine with CRUD, trigger-based lookup, business hours/retry policy config. |
+| 2026-07-03 | Backend | Sprint 5: Create Running Instance Engine | `backend/app/runtime/services.py`, `backend/app/runtime/schemas.py`, `backend/app/runtime/validators.py`, `backend/app/runtime/instance_manager.py`, `backend/app/runtime/exceptions.py`, `backend/app/runtime/__init__.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Running Instance Engine with CRUD, state management (pause/resume/cancel/complete), duplicate prevention. |
+| 2026-07-03 | Backend | Sprint 5: Create Pipeline module | `backend/app/pipeline.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Pipeline for processing JAWIS events through the complete communication chain. |
+| 2026-07-03 | Backend | Add missing FK on flow_execution_logs.running_instance_id | `backend/app/models/flow_execution_log.py`, `backend/alembic/versions/b3c4d5e6f7a8_add_fk_running_instance_id.py`, `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added foreign key constraint ensuring referential integrity between flow execution logs and running journey instances. |
 
 ---
 

@@ -1,13 +1,5 @@
-<<<<<<< HEAD
-import { useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-
-export default function JourneyMonitor() {
-  const navigate = useNavigate();
-  useEffect(() => { navigate("/journeys", { replace: true }); }, [navigate]);
-  return null;
-=======
-import { useMemo, useState } from "react";
 import PageHeader from "@/components/PageHeader";
 import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
@@ -35,109 +27,202 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CUSTOMERS, TIMELINE } from "@/dummy-data";
-import { COMPANIES } from "@/dummy-data/companies";
 import {
-  Sparkles,
-  Zap,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { JourneyList, useJourneys } from "@/modules/journeys";
+import { runningInstanceService } from "@/services/runningInstances";
+import { journeyService } from "@/services/journeys";
+import { stageMappingService } from "@/services/stageMappings";
+import { flowExecutionLogService } from "@/services/flowExecutionLogs";
+import { toast } from "sonner";
+import {
   Workflow,
-  Phone,
-  Mail,
-  MessageCircle,
+  Settings,
   Clock,
   Pause,
   Play,
 } from "lucide-react";
 
-const JOURNEYS_LIST = ["Welcome Series", "Lead Qualification", "Visit Reminder", "Proposal Follow-up", "Renewal", "Onboarding"];
-const AUTOS = ["Running", "Paused", "Draft", "Completed"];
-const COMMS = ["Unread", "Open", "Closed", "Assigned"];
+const INSTANCE_STATUS_TONE = {
+  pending: "neutral",
+  running: "info",
+  waiting: "warning",
+  paused: "warning",
+  failed: "danger",
+  completed: "success",
+  cancelled: "neutral",
+};
+
 const PRIORITIES = ["High", "Medium", "Low"];
-const OWNERS = ["Maya Iyer", "Rohan Mehta", "Ana Souza", "Kenji Watanabe"];
-const HEALTH_TONE = { Healthy: "success", "At Risk": "warning", Stalled: "danger" };
-const HEALTHS = ["Healthy", "Healthy", "At Risk", "Healthy", "Stalled"];
-const NEXT_STEPS = ["Send WhatsApp template", "AI Decision", "Assign AE", "Wait 2 days", "Send pricing email"];
 
-const priorityTone = { High: "danger", Medium: "info", Low: "neutral" };
-
-function toRow(c, i) {
-  const co = COMPANIES.find((x) => x.name === c.company);
-  const journey = JOURNEYS_LIST[i % JOURNEYS_LIST.length];
+function toRow(instance, journeyMap) {
+  const leadId = instance.lead_id || "";
+  const j = journeyMap[instance.journey_id];
   return {
-    ...c,
-    companyRef: co,
-    journey,
-    autoStatus: AUTOS[i % AUTOS.length],
-    comms: COMMS[i % COMMS.length],
-    health: HEALTHS[i % HEALTHS.length],
-    messagesSent: 8 + ((i * 3) % 22),
-    replies: 1 + ((i * 2) % 9),
-    pendingActions: (i % 3) + 1,
-    priority: PRIORITIES[i % PRIORITIES.length],
-    nextAutomation: NEXT_STEPS[i % NEXT_STEPS.length],
-    lastActivity: c.lastContact,
-    phone: `+91 98${String(10000 + i * 137).slice(0, 6)}`,
+    id: instance.id,
+    journey_id: instance.journey_id,
+    lead_id: instance.lead_id,
+    name: `Lead #${leadId}`,
+    initials: String(leadId).slice(0, 2).toUpperCase() || "??",
+    email: "",
+    phone: "",
+    company: "",
+    stage: j?.status || "—",
+    journey: j?.name || "Unknown",
+    autoStatus: instance.status || "unknown",
+    comms: instance.status === "running" ? "Open" : "Closed",
+    health: instance.status === "completed" ? "Healthy" : instance.status === "failed" ? "Stalled" : "At Risk",
+    messagesSent: 0,
+    replies: 0,
+    pendingActions: 0,
+    owner: "—",
+    priority: PRIORITIES[Math.floor(Math.random() * PRIORITIES.length)],
+    nextAutomation: instance.status === "running" ? "Active" : instance.status === "completed" ? "Completed" : instance.status,
+    lastActivity: instance.updated_at || instance.created_at || "—",
+    aiSummary: "",
+    healthTone: instance.status === "completed" ? "success" : instance.status === "failed" ? "danger" : "warning",
+    timeline: [],
   };
 }
 
 const FILTER_TABS = [
   { label: "All", value: "all" },
-  { label: "Running", value: "Running" },
-  { label: "Paused", value: "Paused" },
-  { label: "At Risk", value: "AtRisk" },
+  { label: "Running", value: "running" },
+  { label: "Paused", value: "paused" },
+  { label: "Failed", value: "failed" },
 ];
 
 export default function JourneyMonitor() {
+  const navigate = useNavigate();
+  const [viewMode, setViewMode] = useState("monitor");
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("all");
-  const [leadStage, setLeadStage] = useState("all");
-  const [journey, setJourney] = useState("all");
-  const [owner, setOwner] = useState("all");
-  const [priority, setPriority] = useState("all");
-  const [company, setCompany] = useState("all");
+  const [journeyFilter, setJourneyFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [instances, setInstances] = useState([]);
+  const [journeyMap, setJourneyMap] = useState({});
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
+  const [logs, setLogs] = useState([]);
 
-  const enriched = useMemo(() => CUSTOMERS.map(toRow), []);
+  const { journeys, loading: journeysLoading, refetch: refetchJourneys } = useJourneys();
+  const [mappings, setMappings] = useState([]);
+  const [instanceCounts, setInstanceCounts] = useState({});
+  const [manageSearch, setManageSearch] = useState("");
+  const [manageFilter, setManageFilter] = useState("all");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createDesc, setCreateDesc] = useState("");
+
+  useEffect(() => {
+    Promise.all([
+      runningInstanceService.list(),
+      journeyService.list(),
+    ]).then(([instancesData, journeysData]) => {
+      setInstances(instancesData);
+      const map = {};
+      journeysData.forEach((j) => { map[j.id] = j; });
+      setJourneyMap(map);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (viewMode !== "manage") return;
+    stageMappingService.list().then(setMappings).catch(() => {});
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "manage" || !journeys.length) return;
+    Promise.all(
+      journeys.map(async (j) => {
+        try {
+          const result = await runningInstanceService.list({ journeyId: j.id });
+          return { id: j.id, count: result.length };
+        } catch {
+          return { id: j.id, count: 0 };
+        }
+      })
+    ).then((results) => {
+      const map = {};
+      results.forEach((r) => { map[r.id] = r.count; });
+      setInstanceCounts(map);
+    });
+  }, [viewMode, journeys]);
+
+  const enriched = useMemo(() => instances.map((i) => toRow(i, journeyMap)), [instances, journeyMap]);
 
   const rows = useMemo(() => {
     return enriched.filter((r) => {
-      if (tab === "Running" && r.autoStatus !== "Running") return false;
-      if (tab === "Paused" && r.autoStatus !== "Paused") return false;
-      if (tab === "AtRisk" && r.health !== "At Risk") return false;
-      if (leadStage !== "all" && r.stage !== leadStage) return false;
-      if (journey !== "all" && r.journey !== journey) return false;
-      if (owner !== "all" && r.owner !== owner) return false;
-      if (priority !== "all" && r.priority !== priority) return false;
-      if (company !== "all" && r.company !== company) return false;
+      if (tab === "all") {}
+      else if (tab === "running" && r.autoStatus !== "running") return false;
+      else if (tab === "paused" && r.autoStatus !== "paused") return false;
+      else if (tab === "failed" && r.autoStatus !== "failed") return false;
+      if (journeyFilter !== "all" && r.journey !== journeyFilter) return false;
+      if (statusFilter !== "all" && r.autoStatus !== statusFilter) return false;
       if (search) {
         const q = search.toLowerCase();
-        const hay = `${r.name} ${r.company} ${r.email} ${r.phone}`.toLowerCase();
+        const hay = `${r.name} ${r.journey} ${r.autoStatus}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [enriched, tab, leadStage, journey, owner, priority, company, search]);
+  }, [enriched, tab, search, journeyFilter, statusFilter]);
 
   const filterOptions = FILTER_TABS.map((f) => ({
     ...f,
-    count:
-      f.value === "all"
-        ? enriched.length
-        : f.value === "AtRisk"
-        ? enriched.filter((r) => r.health === "At Risk").length
-        : enriched.filter((r) => r.autoStatus === f.value).length,
+    count: f.value === "all" ? enriched.length : enriched.filter((r) => r.autoStatus === f.value).length,
   }));
 
-  const stageOptions = ["all", ...Array.from(new Set(enriched.map((r) => r.stage)))];
-  const journeyOptions = ["all", ...JOURNEYS_LIST];
-  const ownerOptions = ["all", ...OWNERS];
-  const priorityOptions = ["all", ...PRIORITIES];
-  const companyOptions = ["all", ...Array.from(new Set(enriched.map((r) => r.company)))];
+  const enrichedJourneys = useMemo(() => {
+    if (!journeys.length) return [];
+    return journeys.map((j) => ({
+      ...j,
+      stageMappings: mappings.filter((sm) => sm.journey_id === j.id),
+      runningCount: instanceCounts[j.id] || 0,
+      health: null,
+    }));
+  }, [journeys, mappings, instanceCounts]);
+
+  const handleSelect = async (row) => {
+    setSelected(row);
+    try {
+      const logData = await flowExecutionLogService.list({ runningInstanceId: row.id });
+      setLogs(logData);
+    } catch {
+      setLogs([]);
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!createName.trim()) return;
+    try {
+      await journeyService.create({
+        name: createName.trim(),
+        description: createDesc.trim() || null,
+        trigger_type: "lead_stage_changed",
+      });
+      setCreateOpen(false);
+      setCreateName("");
+      setCreateDesc("");
+      refetchJourneys();
+      toast.success("Journey created");
+    } catch (err) {
+      toast.error(err.message || "Failed to create journey");
+    }
+  };
 
   const columns = [
     {
       key: "name",
-      label: "Customer",
+      label: "Lead",
       render: (r) => (
         <div className="flex items-center gap-2.5">
           <Avatar className="h-7 w-7">
@@ -145,53 +230,28 @@ export default function JourneyMonitor() {
           </Avatar>
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold">{r.name}</div>
-            <div className="truncate text-[10px] text-muted-foreground">{r.email}</div>
           </div>
         </div>
       ),
     },
-    { key: "company", label: "Company", render: (r) => <span className="whitespace-nowrap text-sm">{r.company}</span> },
-    { key: "stage", label: "Lead Stage", render: (r) => <StatusBadge status={r.stage} /> },
     {
       key: "journey",
-      label: "Current Journey",
+      label: "Journey",
       render: (r) => (
         <div className="flex items-center gap-1.5 whitespace-nowrap text-xs">
-          <Zap className="h-3 w-3 text-primary" /> {r.journey}
+          <Workflow className="h-3 w-3 text-primary" /> {r.journey}
         </div>
       ),
     },
-    { key: "autoStatus", label: "Automation", render: (r) => <StatusBadge status={r.autoStatus === "Running" ? "Active" : r.autoStatus} /> },
-    { key: "comms", label: "Conversation", render: (r) => <StatusBadge status={r.comms} /> },
+    { key: "autoStatus", label: "Status", render: (r) => <StatusBadge status={r.autoStatus} tone={INSTANCE_STATUS_TONE[r.autoStatus]} /> },
     {
       key: "health",
       label: "Health",
-      render: (r) => <StatusBadge status={r.health === "Healthy" ? "Active" : r.health === "At Risk" ? "Open" : "Lost"} tone={HEALTH_TONE[r.health]} />,
-    },
-    { key: "messagesSent", label: "Sent", render: (r) => <span className="font-mono text-xs font-semibold">{r.messagesSent}</span> },
-    { key: "replies", label: "Replies", render: (r) => <span className="font-mono text-xs font-semibold">{r.replies}</span> },
-    {
-      key: "pendingActions",
-      label: "Pending",
-      render: (r) => (
-        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary/10 px-1.5 font-mono text-[10px] font-semibold text-primary">
-          {r.pendingActions}
-        </span>
-      ),
-    },
-    { key: "owner", label: "Owner", render: (r) => <span className="whitespace-nowrap text-xs">{r.owner}</span> },
-    {
-      key: "aiSummary",
-      label: "AI Summary",
-      render: (r) => (
-        <span className="line-clamp-1 max-w-[220px] text-xs text-muted-foreground">
-          {r.health === "Healthy" ? "On track — high intent" : r.health === "At Risk" ? "Stalled — needs nudge" : "No reply in 14 days"}
-        </span>
-      ),
+      render: (r) => <StatusBadge status={r.health === "Healthy" ? "Active" : r.health === "At Risk" ? "Open" : "Lost"} tone={r.healthTone} />,
     },
     {
       key: "nextAutomation",
-      label: "Next Automation",
+      label: "Current Node",
       render: (r) => (
         <span className="flex items-center gap-1 whitespace-nowrap text-xs">
           <Clock className="h-3 w-3 text-muted-foreground" />
@@ -200,182 +260,195 @@ export default function JourneyMonitor() {
       ),
     },
     { key: "lastActivity", label: "Last Activity", render: (r) => <span className="whitespace-nowrap text-xs text-muted-foreground">{r.lastActivity}</span> },
-    {
-      key: "timeline",
-      label: "Timeline",
-      render: (r) => (
-        <div className="flex items-center gap-0.5">
-          {[0, 1, 2, 3, 4].map((i) => (
-            <span
-              key={i}
-              className={`h-3 w-1.5 rounded-sm ${
-                i < Math.min(4, Math.floor(r.messagesSent / 6))
-                  ? "bg-primary"
-                  : "bg-secondary"
-              }`}
-            />
-          ))}
-        </div>
-      ),
-    },
   ];
 
+  const steps = selected ? logs.map((log, i) => ({
+    name: `${log.action || log.node_action || "Step"} ${i + 1}`,
+    state: log.status === "completed" ? "done" : log.status === "failed" ? "done" : "current",
+  })) : [];
+
+  if (loading) {
+    return (
+      <div data-testid="page-journeys">
+        <PageHeader title="Journeys" description="Monitor running instances and manage journey definitions." />
+        <div className="flex items-center justify-center p-12 text-sm text-muted-foreground">Loading…</div>
+      </div>
+    );
+  }
+
   return (
-    <div data-testid="page-journey-monitor">
+    <div data-testid="page-journeys">
       <PageHeader
-        title="Journey Monitor"
-        description="Every contact, in real time, across every automated journey."
+        title={viewMode === "monitor" ? "Journey Monitor" : "Manage Journeys"}
+        description={
+          viewMode === "monitor"
+            ? "Every contact, in real time, across every automated journey."
+            : "Create, edit, and manage your journey definitions."
+        }
+        actions={
+          viewMode === "monitor" ? (
+            <Button size="sm" variant="outline" onClick={() => setViewMode("manage")}>
+              <Settings className="mr-2 h-3.5 w-3.5" /> Manage Journeys
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={() => setViewMode("monitor")}>
+              <Workflow className="mr-2 h-3.5 w-3.5" /> Running Monitor
+            </Button>
+          )
+        }
       />
 
-      <div className="space-y-4 px-4 py-6 md:px-8">
-        {/* Search + tabs */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search customer, company, phone, email…"
-            className="w-full sm:max-w-sm"
-            testId="journey-monitor-search"
-          />
-          <FilterBar options={filterOptions} value={tab} onChange={setTab} testId="journey-monitor-tabs" />
-        </div>
+      {viewMode === "monitor" ? (
+        <>
+          <div className="space-y-4 px-4 py-6 md:px-8">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <SearchBar
+                value={search}
+                onChange={setSearch}
+                placeholder="Search lead, journey, status…"
+                className="w-full sm:max-w-sm"
+                testId="journey-monitor-search"
+              />
+              <FilterBar options={filterOptions} value={tab} onChange={setTab} testId="journey-monitor-tabs" />
+            </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Filters</span>
-          <FilterSelect label="Lead Stage" value={leadStage} onChange={setLeadStage} options={stageOptions} />
-          <FilterSelect label="Journey" value={journey} onChange={setJourney} options={journeyOptions} />
-          <FilterSelect label="Owner" value={owner} onChange={setOwner} options={ownerOptions} />
-          <FilterSelect label="Automation" value={tab} onChange={setTab} options={["all", "Running", "Paused", "Draft", "Completed"]} />
-          <FilterSelect label="Priority" value={priority} onChange={setPriority} options={priorityOptions} />
-          <FilterSelect label="Company" value={company} onChange={setCompany} options={companyOptions} />
-        </div>
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Filters</span>
+              <FilterSelect label="Journey" value={journeyFilter} onChange={setJourneyFilter} options={["all", ...Array.from(new Set(enriched.map((r) => r.journey)))]} />
+              <FilterSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={["all", "running", "paused", "completed", "failed", "waiting"]} />
+            </div>
 
-        <DataTable columns={columns} rows={rows} onRowClick={setSelected} testId="journey-monitor-table" />
-      </div>
+            <DataTable columns={columns} rows={rows} onRowClick={handleSelect} testId="journey-monitor-table" />
+          </div>
 
-      <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
-          {selected && (
-            <>
-              <SheetHeader className="border-b border-border p-6">
-                <div className="flex items-start gap-4">
-                  <Avatar className="h-14 w-14">
-                    <AvatarFallback className="bg-primary/10 text-base font-semibold text-primary">{selected.initials}</AvatarFallback>
-                  </Avatar>
-                  <div className="min-w-0 flex-1 text-left">
-                    <SheetTitle className="truncate text-lg">{selected.name}</SheetTitle>
-                    <p className="truncate text-sm text-muted-foreground">{selected.company}</p>
-                    <p className="truncate text-xs text-muted-foreground">{selected.phone} · {selected.email}</p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      <StatusBadge status={selected.autoStatus === "Running" ? "Active" : selected.autoStatus} />
-                      <StatusBadge status={selected.health === "Healthy" ? "Active" : selected.health === "At Risk" ? "Open" : "Lost"} tone={HEALTH_TONE[selected.health]} />
-                      <StatusBadge status={selected.priority === "High" ? "Overdue" : selected.priority === "Medium" ? "Open" : "Completed"} tone={priorityTone[selected.priority]} />
-                    </div>
-                  </div>
-                </div>
-                <div className="mt-4 flex gap-2">
-                  <Button size="sm" className="flex-1">
-                    <MessageCircle className="mr-2 h-3.5 w-3.5" /> WhatsApp
-                  </Button>
-                  <Button size="sm" variant="outline" className="flex-1">
-                    <Phone className="mr-2 h-3.5 w-3.5" /> Call
-                  </Button>
-                </div>
-              </SheetHeader>
-
-              <Tabs defaultValue="journey" className="p-6">
-                <TabsList className="grid w-full grid-cols-4">
-                  <TabsTrigger value="journey" className="text-xs">Journey</TabsTrigger>
-                  <TabsTrigger value="steps" className="text-xs">Steps</TabsTrigger>
-                  <TabsTrigger value="timeline" className="text-xs">Timeline</TabsTrigger>
-                  <TabsTrigger value="ai" className="text-xs">AI</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="journey" className="mt-5 space-y-3 text-sm">
-                  <div className="rounded-lg border border-border bg-card p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Workflow className="h-3.5 w-3.5 text-primary" />
-                        <span className="text-sm font-semibold">{selected.journey}</span>
+          <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
+            <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
+              {selected && (
+                <>
+                  <SheetHeader className="border-b border-border p-6">
+                    <div className="flex items-start gap-4">
+                      <Avatar className="h-14 w-14">
+                        <AvatarFallback className="bg-primary/10 text-base font-semibold text-primary">{selected.initials}</AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0 flex-1 text-left">
+                        <SheetTitle className="truncate text-lg">{selected.name}</SheetTitle>
+                        <p className="mt-2 flex flex-wrap gap-1.5">
+                          <StatusBadge status={selected.autoStatus} tone={INSTANCE_STATUS_TONE[selected.autoStatus]} />
+                          <StatusBadge status={selected.health === "Healthy" ? "Active" : selected.health === "At Risk" ? "Open" : "Lost"} tone={selected.healthTone} />
+                        </p>
                       </div>
-                      <StatusBadge status={selected.autoStatus === "Running" ? "Active" : selected.autoStatus} />
                     </div>
-                    <div className="mt-2 flex items-center gap-3 text-[11px] text-muted-foreground">
-                      <span><span className="font-mono font-semibold text-foreground">{selected.messagesSent}</span> sent</span>
-                      <span>·</span>
-                      <span><span className="font-mono font-semibold text-foreground">{selected.replies}</span> replies</span>
-                      <span>·</span>
-                      <span><span className="font-mono font-semibold text-foreground">{selected.pendingActions}</span> pending</span>
-                    </div>
-                  </div>
-                  <MetaRow label="Lead stage" value={selected.stage} />
-                  <MetaRow label="Owner" value={selected.owner} />
-                  <MetaRow label="Priority" value={selected.priority} />
-                  <MetaRow label="Health" value={selected.health} />
-                  <MetaRow label="Next automation" value={selected.nextAutomation} />
-                  <Separator />
-                  <div className="flex flex-col gap-1.5">
-                    <Button variant="outline" size="sm" className="h-8 justify-start text-xs">
-                      <Pause className="mr-2 h-3 w-3" /> Pause journey
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-8 justify-start text-xs">
-                      <Play className="mr-2 h-3 w-3" /> Move to different journey
-                    </Button>
-                  </div>
-                </TabsContent>
+                  </SheetHeader>
 
-                <TabsContent value="steps" className="mt-5 space-y-2">
-                  {[
-                    { name: "Trigger · New conversation", state: "done" },
-                    { name: "AI Decision · Intent classifier", state: "done" },
-                    { name: "Send WhatsApp template", state: "done" },
-                    { name: "Wait 2 days", state: "current" },
-                    { name: "Send pricing email", state: "upcoming" },
-                    { name: "Assign AE", state: "upcoming" },
-                  ].map((s, i) => (
-                    <div key={i} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-                      <span
-                        className={`inline-block h-2.5 w-2.5 rounded-full ${
-                          s.state === "done"
-                            ? "bg-emerald-500"
-                            : s.state === "current"
-                            ? "bg-primary"
-                            : "bg-secondary"
-                        }`}
-                      />
-                      <span className={`text-sm ${s.state === "upcoming" ? "text-muted-foreground" : "font-medium"}`}>{s.name}</span>
-                    </div>
-                  ))}
-                </TabsContent>
+                  <Tabs defaultValue="journey" className="p-6">
+                    <TabsList className="grid w-full grid-cols-3">
+                      <TabsTrigger value="journey" className="text-xs">Journey</TabsTrigger>
+                      <TabsTrigger value="steps" className="text-xs">Steps</TabsTrigger>
+                      <TabsTrigger value="timeline" className="text-xs">Timeline</TabsTrigger>
+                    </TabsList>
 
-                <TabsContent value="timeline" className="mt-5">
-                  <ol className="relative space-y-4 border-l border-border pl-5">
-                    {TIMELINE.map((t) => (
-                      <li key={t.id} className="relative">
-                        <span className="absolute -left-[26px] top-1 flex h-3 w-3 items-center justify-center rounded-full border-2 border-background bg-primary" />
-                        <div className="text-xs text-muted-foreground">{t.time}</div>
-                        <p className="text-sm">{t.text}</p>
-                      </li>
-                    ))}
-                  </ol>
-                </TabsContent>
+                    <TabsContent value="journey" className="mt-5 space-y-3 text-sm">
+                      <div className="rounded-lg border border-border bg-card p-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Workflow className="h-3.5 w-3.5 text-primary" />
+                            <span className="text-sm font-semibold">{selected.journey}</span>
+                          </div>
+                          <StatusBadge status={selected.autoStatus} tone={INSTANCE_STATUS_TONE[selected.autoStatus]} />
+                        </div>
+                      </div>
+                      <MetaRow label="Status" value={selected.autoStatus} />
+                      <MetaRow label="Current Node" value={selected.nextAutomation} />
+                      <MetaRow label="Lead ID" value={selected.lead_id} />
+                      <MetaRow label="Health" value={selected.health} />
+                      <Separator />
+                      <div className="flex flex-col gap-1.5">
+                        <Button variant="outline" size="sm" className="h-8 justify-start text-xs">
+                          <Pause className="mr-2 h-3 w-3" /> Pause instance
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-8 justify-start text-xs">
+                          <Play className="mr-2 h-3 w-3" /> Resume instance
+                        </Button>
+                      </div>
+                    </TabsContent>
 
-                <TabsContent value="ai" className="mt-5">
-                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-                    <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-primary">
-                      <Sparkles className="h-3.5 w-3.5" /> AI Summary
-                    </div>
-                    <p className="text-sm leading-relaxed">
-                      {selected.name} is currently on the {selected.journey.toLowerCase()} track. Health is {selected.health.toLowerCase()}. The next scheduled step is “{selected.nextAutomation}”. Reply rate is {Math.round((selected.replies / Math.max(1, selected.messagesSent)) * 100)}%.
-                    </p>
-                  </div>
-                </TabsContent>
-              </Tabs>
-            </>
+                    <TabsContent value="steps" className="mt-5 space-y-2">
+                      {steps.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No execution logs available.</div>
+                      ) : (
+                        steps.map((s, i) => (
+                          <div key={i} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
+                            <span
+                              className={`inline-block h-2.5 w-2.5 rounded-full ${
+                                s.state === "done" ? "bg-emerald-500" : s.state === "current" ? "bg-primary" : "bg-secondary"
+                              }`}
+                            />
+                            <span className={`text-sm ${s.state === "upcoming" ? "text-muted-foreground" : "font-medium"}`}>{s.name}</span>
+                          </div>
+                        ))
+                      )}
+                    </TabsContent>
+
+                    <TabsContent value="timeline" className="mt-5">
+                      {logs.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No timeline events.</div>
+                      ) : (
+                        <ol className="relative space-y-4 border-l border-border pl-5">
+                          {logs.map((log, i) => (
+                            <li key={log.id || i} className="relative">
+                              <span className="absolute -left-[26px] top-1 flex h-3 w-3 items-center justify-center rounded-full border-2 border-background bg-primary" />
+                              <div className="text-xs text-muted-foreground">{log.created_at || log.timestamp || "—"}</div>
+                              <p className="text-sm">{log.action || log.node_action || "Execution event"}</p>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </TabsContent>
+                  </Tabs>
+                </>
+              )}
+            </SheetContent>
+          </Sheet>
+        </>
+      ) : (
+        <div className="space-y-4 px-4 py-6 md:px-8">
+          {journeysLoading ? (
+            <div className="flex items-center justify-center p-12 text-sm text-muted-foreground">Loading journeys…</div>
+          ) : (
+            <JourneyList
+              journeys={enrichedJourneys}
+              search={manageSearch}
+              onSearchChange={setManageSearch}
+              filter={manageFilter}
+              onFilterChange={setManageFilter}
+              onCreate={() => setCreateOpen(true)}
+            />
           )}
-        </SheetContent>
-      </Sheet>
+        </div>
+      )}
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Journey</DialogTitle>
+            <DialogDescription>Define a new automated journey for your leads.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="name">Name</Label>
+              <Input id="name" value={createName} onChange={(e) => setCreateName(e.target.value)} placeholder="e.g. Lead Qualification" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="desc">Description</Label>
+              <Input id="desc" value={createDesc} onChange={(e) => setCreateDesc(e.target.value)} placeholder="Optional description" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreate}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -405,5 +478,4 @@ function MetaRow({ label, value }) {
       <span className="font-medium">{value}</span>
     </div>
   );
->>>>>>> 321075ad65aa3df54916ae638505753705e9661b
 }

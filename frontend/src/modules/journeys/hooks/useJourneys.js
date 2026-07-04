@@ -1,12 +1,12 @@
-import { useState, useEffect } from "react";
-import { journeyService } from "@/services";
+import { useState, useEffect, useCallback } from "react";
+import { journeyService } from "@/services/journeys";
 
 export function useJourneys() {
   const [journeys, setJourneys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const fetch = async () => {
+  const fetch = useCallback(async () => {
     try {
       setLoading(true);
       const data = await journeyService.list();
@@ -16,9 +16,9 @@ export function useJourneys() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  useEffect(() => { fetch(); }, []);
+  useEffect(() => { fetch(); }, [fetch]);
 
   return { journeys, loading, error, refetch: fetch };
 }
@@ -28,7 +28,7 @@ export function useJourney(id) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const fetch = async () => {
+  const fetch = useCallback(async () => {
     if (!id) return;
     try {
       setLoading(true);
@@ -39,9 +39,9 @@ export function useJourney(id) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
 
-  useEffect(() => { fetch(); }, [id]);
+  useEffect(() => { fetch(); }, [fetch]);
 
   return { journey, loading, error, refetch: fetch };
 }
