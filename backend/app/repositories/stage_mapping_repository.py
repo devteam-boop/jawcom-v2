@@ -54,3 +54,9 @@ class StageMappingRepository(BaseRepository[StageMapping]):
             select(StageMapping).where(StageMapping.stage_key == stage_key)
         )
         return list(result.scalars().all())
+
+    async def get_by_template_id(self, template_id: UUID) -> List[StageMapping]:
+        result = await self.session.execute(
+            select(StageMapping).where(StageMapping.template_id == template_id)
+        )
+        return list(result.scalars().all())

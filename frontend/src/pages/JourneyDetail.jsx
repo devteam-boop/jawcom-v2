@@ -1,5 +1,5 @@
 import { useParams, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import PageHeader from "@/components/PageHeader";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -71,10 +71,16 @@ export default function JourneyDetail() {
   const [publishResult, setPublishResult] = useState(null);
   const [publishing, setPublishing] = useState(false);
 
+  const fetchInstances = useCallback(() => {
+    if (!id) return;
+    runningInstanceService.list({ journeyId: id }).then(setInstances).catch(() => {});
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
     stageMappingService.list({ journeyId: id }).then(setMappings).catch(() => {});
-    runningInstanceService.list({ journeyId: id }).then(setInstances).catch(() => {});
+    fetchInstances();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -85,7 +91,7 @@ export default function JourneyDetail() {
   }, [journey]);
 
   const handleTabChange = (value) => {
-    window.history.pushState(null, "", `/journeys/${id}/${value}`);
+    navigate(`/journeys/${id}/${value}`);
   };
 
   const handleAction = async (action) => {
@@ -285,7 +291,7 @@ export default function JourneyDetail() {
               </Button>
               <span className="text-xs text-muted-foreground">Build your flow, then save and publish it.</span>
             </div>
-            <div className="flex-1">
+            <div className="flex-1 min-h-0">
               <FlowBuilder journeyId={id} journeyName={journey.name} />
             </div>
             <div className="flex justify-end border-t border-border bg-background px-6 py-3">
@@ -411,10 +417,20 @@ export default function JourneyDetail() {
         </Tabs>
       </div>
 
-      <div className={`flex-1 ${section === "flow" ? "" : "overflow-y-auto"} scrollbar-thin px-4 py-6 md:px-8`}>
-        {section === "dashboard" && <JourneyDashboard journey={journey} instances={instances} />}
+      <div className={`flex-1 min-h-0 ${section === "flow" ? "overflow-hidden" : "overflow-y-auto"} scrollbar-thin px-4 py-6 md:px-8`}>
+        {section === "dashboard" && (
+          <JourneyDashboard
+            journey={journey}
+            instances={instances}
+            mappings={mappings}
+            actionLoading={actionLoading}
+            onAction={handleAction}
+            onTestJourney={() => setTestOpen(true)}
+            onOpenFlow={() => handleTabChange("flow")}
+          />
+        )}
         {section === "flow" && <FlowBuilder journeyId={id} journeyName={journey.name} />}
-        {section === "running" && <RunningInstances instances={instances} />}
+        {section === "running" && <RunningInstances instances={instances} onRefresh={fetchInstances} />}
         {section === "settings" && (
           <JourneySettings
             journey={journey}

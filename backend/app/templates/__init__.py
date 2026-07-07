@@ -4,7 +4,6 @@ from .schemas import (
     TemplateSchema,
     TemplateCreateSchema,
     TemplateUpdateSchema,
-    TemplateVersionSchema,
     RenderTemplateRequest,
     TemplateUsageSchema
 )
@@ -19,7 +18,6 @@ __all__ = [
     "TemplateSchema",
     "TemplateCreateSchema",
     "TemplateUpdateSchema",
-    "TemplateVersionSchema",
     "RenderTemplateRequest",
     "TemplateUsageSchema",
     "TemplateNotFoundError",

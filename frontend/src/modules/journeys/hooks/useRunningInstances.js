@@ -20,5 +20,13 @@ export function useRunningInstances(journeyId) {
 
   useEffect(() => { fetch(); }, [fetch]);
 
+  useEffect(() => {
+    if (!journeyId) return;
+    const interval = setInterval(() => {
+      runningInstanceService.list({ journeyId }).then(setInstances).catch(() => {});
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [journeyId]);
+
   return { instances, loading, error, refetch: fetch };
 }

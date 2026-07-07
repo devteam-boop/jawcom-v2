@@ -5,7 +5,7 @@ from .running_journey_instance import RunningJourneyInstance, InstanceStatus
 from .flow_definition import FlowDefinition, FlowDefinitionStatus
 from .flow_version import FlowVersion
 from .flow_execution_log import FlowExecutionLog
-from .custom_template import CustomTemplate
+from .template import Template, TemplateChannel, TemplateStatus
 
 __all__ = [
     "Base",
@@ -18,5 +18,7 @@ __all__ = [
     "FlowDefinitionStatus",
     "FlowVersion",
     "FlowExecutionLog",
-    "CustomTemplate",
+    "Template",
+    "TemplateChannel",
+    "TemplateStatus",
 ]

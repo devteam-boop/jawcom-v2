@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { toast } from "sonner";
 import {
   useNodesState,
   useEdgesState,
@@ -19,6 +20,14 @@ import {
   NotificationNode,
   WaitNode,
   EndNode,
+  UpdateLeadNode,
+  UpdateCompanyNode,
+  AssignOwnerNode,
+  ChangeLeadStageNode,
+  CreateCRMTaskNode,
+  CreateNoteNode,
+  ApprovalNode,
+  ManualTaskNode,
 } from "./nodes";
 
 const NODE_TYPES = {
@@ -30,6 +39,14 @@ const NODE_TYPES = {
   notification: NotificationNode,
   wait: WaitNode,
   end: EndNode,
+  update_lead: UpdateLeadNode,
+  update_company: UpdateCompanyNode,
+  assign_owner: AssignOwnerNode,
+  change_lead_stage: ChangeLeadStageNode,
+  create_crm_task: CreateCRMTaskNode,
+  create_note: CreateNoteNode,
+  approval: ApprovalNode,
+  manual_task: ManualTaskNode,
 };
 
 function toRfNodes(apiNodes) {
@@ -72,7 +89,7 @@ function toApiEdges(rfEdges) {
 }
 
 export default function FlowBuilder({ journeyId, journeyName }) {
-  const { flow, loading, saving, publishing, save, publish, error } =
+  const { flow, loading, saving, publishing, validating, validation, save, validate, publish, error } =
     useFlowBuilder(journeyId);
   const [selectedId, setSelectedId] = useState(null);
 
@@ -156,13 +173,25 @@ export default function FlowBuilder({ journeyId, journeyName }) {
     save(buildDefinition());
   }, [save, buildDefinition]);
 
-  const handleValidate = useCallback(() => {}, []);
-
-  const handlePublish = useCallback(() => {
-    if (flow?.id) {
-      publish(flow.id);
+  const handleValidate = useCallback(async () => {
+    if (!flow?.id) {
+      toast.error("Save the flow first before validating");
+      return;
     }
-  }, [publish, flow]);
+    // Validate always checks the persisted definition, so make sure the
+    // current canvas is saved first — otherwise it silently validates a
+    // stale, previously-saved copy that may be missing edits made since.
+    await save(buildDefinition());
+    await validate(flow.id);
+  }, [validate, save, buildDefinition, flow]);
+
+  const handlePublish = useCallback(async () => {
+    if (!flow?.id) return;
+    // Same reasoning as handleValidate: publish validates the persisted
+    // definition, so save the live canvas first.
+    await save(buildDefinition());
+    await publish(flow.id);
+  }, [publish, save, buildDefinition, flow]);
 
   if (loading) {
     return (
@@ -171,6 +200,8 @@ export default function FlowBuilder({ journeyId, journeyName }) {
       </div>
     );
   }
+
+  const hasErrors = validation && !validation.valid;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -181,8 +212,49 @@ export default function FlowBuilder({ journeyId, journeyName }) {
         onPublish={handlePublish}
         saving={saving}
         publishing={publishing}
+        validating={validating}
+        hasErrors={hasErrors}
       />
-      <div className="grid min-h-0 flex-1 grid-rows-1 grid-cols-1 lg:grid-cols-[200px_1fr_280px]">
+
+      {validation && (
+        <div className={`border-b px-6 py-2 text-xs ${hasErrors ? "bg-red-50 border-red-200" : "bg-emerald-50 border-emerald-200"}`}>
+          {hasErrors ? (
+            <div className="space-y-1">
+              <p className="font-semibold text-red-700">
+                Validation failed — {validation.errors.length} error{validation.errors.length !== 1 ? "s" : ""}
+              </p>
+              <ul className="list-disc pl-4 text-red-600">
+                {validation.errors.map((err, i) => (
+                  <li key={i}>{err.message}</li>
+                ))}
+              </ul>
+              {validation.warnings?.length > 0 && (
+                <>
+                  <p className="mt-2 font-semibold text-amber-700">
+                    {validation.warnings.length} warning{validation.warnings.length !== 1 ? "s" : ""}
+                  </p>
+                  <ul className="list-disc pl-4 text-amber-600">
+                    {validation.warnings.map((w, i) => (
+                      <li key={i}>{w.message}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-emerald-700">
+              <span className="font-semibold">Flow is valid</span>
+              {validation.warnings?.length > 0 && (
+                <span className="text-amber-600">
+                  — {validation.warnings.length} warning{validation.warnings.length !== 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[180px_minmax(360px,1fr)_240px] lg:grid-rows-1 lg:grid-cols-[200px_1fr_280px]">
         <NodePalette />
         <FlowCanvas
           nodes={nodes}

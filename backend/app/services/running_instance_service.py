@@ -76,6 +76,57 @@ class RunningInstanceService:
         updated = await self.repo.update(instance)
         return self._to_schema(updated)
 
+    async def wait(self, instance_id: UUID, instance_data: dict) -> RunningInstanceSchema:
+        """Transition instance to ``waiting`` status and store resume metadata.
+
+        Called by the engine when a Wait node returns ``status="skipped"``.
+        The scheduler will pick up this instance and resume traversal when
+        ``instance.data.resume_at`` is reached.
+        """
+        instance = await self.repo.get(instance_id)
+        if not instance:
+            raise ValueError(f"RunningInstance {instance_id} not found")
+        instance.status = InstanceStatus.WAITING.value
+        instance.data = instance_data
+        updated = await self.repo.update(instance)
+        return self._to_schema(updated)
+
+    async def wait_approval(self, instance_id: UUID, instance_data: dict) -> RunningInstanceSchema:
+        """Transition instance to ``waiting_approval`` status and store approval metadata."""
+        instance = await self.repo.get(instance_id)
+        if not instance:
+            raise ValueError(f"RunningInstance {instance_id} not found")
+        instance.status = InstanceStatus.WAITING_APPROVAL.value
+        instance.data = instance_data
+        updated = await self.repo.update(instance)
+        return self._to_schema(updated)
+
+    async def wait_task(self, instance_id: UUID, instance_data: dict) -> RunningInstanceSchema:
+        """Transition instance to ``waiting_task`` status and store task metadata."""
+        instance = await self.repo.get(instance_id)
+        if not instance:
+            raise ValueError(f"RunningInstance {instance_id} not found")
+        instance.status = InstanceStatus.WAITING_TASK.value
+        instance.data = instance_data
+        updated = await self.repo.update(instance)
+        return self._to_schema(updated)
+
+    async def find_waiting(
+        self, now: Optional[datetime] = None,
+    ) -> List[RunningInstanceSchema]:
+        """Return all instances in ``waiting`` status whose resume_at <= now."""
+        if now is None:
+            now = datetime.utcnow()
+        now_iso = now.isoformat()
+        instances = await self.repo.get_all(status=InstanceStatus.WAITING.value)
+        due = []
+        for inst in instances:
+            data = inst.data or {}
+            resume_at_str = data.get("resume_at")
+            if resume_at_str and resume_at_str <= now_iso:
+                due.append(self._to_schema(inst))
+        return due
+
     async def fail(self, instance_id: UUID) -> RunningInstanceSchema:
         instance = await self.repo.get(instance_id)
         if not instance:

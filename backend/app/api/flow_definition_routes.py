@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +9,7 @@ from app.flow_definitions.schemas import (
     FlowDefinitionSchema,
     FlowDefinitionCreateSchema,
     FlowDefinitionUpdateSchema,
+    ValidationResult,
 )
 from app.services.flow_definition_service import FlowDefinitionService
 
@@ -85,9 +86,23 @@ async def delete_flow_definition(
         raise HTTPException(status_code=404, detail=f"FlowDefinition {definition_id} not found")
 
 
+@router.post("/{definition_id}/validate", response_model=ValidationResult,
+             summary="Validate flow definition",
+             description="Runs graph and node-configuration validation. Returns errors and warnings without modifying state.")
+async def validate_flow_definition(
+    definition_id: UUID,
+    db: AsyncSession = Depends(get_db_session),
+):
+    service = FlowDefinitionService(db)
+    try:
+        return await service.validate(definition_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/{definition_id}/publish", response_model=FlowDefinitionSchema,
              summary="Publish flow definition",
-             description="Sets the flow definition status to published.")
+             description="Validates the flow, then sets status to published. Returns 400 with validation errors if invalid.")
 async def publish_flow_definition(
     definition_id: UUID,
     db: AsyncSession = Depends(get_db_session),
@@ -96,6 +111,9 @@ async def publish_flow_definition(
     try:
         return await service.publish(definition_id)
     except ValueError as e:
+        error_arg = e.args[0] if e.args else None
+        if isinstance(error_arg, dict) and "valid" in error_arg:
+            raise HTTPException(status_code=400, detail=error_arg)
         raise HTTPException(status_code=404, detail=str(e))
 
 

@@ -27,6 +27,7 @@ The source of truth for the trigger stage is **stage_mappings**.
 """
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -35,13 +36,19 @@ from app.events.event_types import (
     LeadCreatedEvent,
     LeadStageChangedEvent,
 )
+from app.execution.executors import ExecutorFactory
+from app.execution.executors.base import ExecutionContext
+from app.execution.providers import LeadProvider, LeadProviderFactory
+from app.services.template_renderer_service import TemplateRendererService
+from app.templates.services import TemplateService
 from app.models.flow_definition import FlowDefinition, FlowDefinitionStatus
 from app.models.journey import JourneyStatus
 from app.repositories.stage_mapping_repository import StageMappingRepository
 from app.services.journey_service import JourneyService
 from app.services.running_instance_service import RunningInstanceService
 from app.services.flow_execution_log_service import FlowExecutionLogService
-from app.runtime.schemas import RunningInstanceCreateSchema
+from app.services.variable_resolver_service import VariableResolverService
+from app.runtime.schemas import RunningInstanceCreateSchema, RunningInstanceUpdateSchema
 from app.flow_definitions.schemas import FlowExecutionLogCreateSchema
 
 logger = logging.getLogger(__name__)
@@ -74,26 +81,13 @@ class ExecutionEngine:
         self._session_factory = session_factory or async_session_maker
 
     # ------------------------------------------------------------------
-    # Public entry points – one per event type + test
+    # Public entry points
     # ------------------------------------------------------------------
 
     async def test_execution(self, journey_id: str, lead_id: int, stage_key: str) -> bool:
-        """Execute a journey directly for testing, without a webhook event.
-
-        Args:
-            journey_id: The journey to execute.
-            lead_id:    The lead to create an instance for.
-            stage_key:  The stage key to match against stage_mappings.
-
-        Resolution:
-            stage_key → stage_mapping → journey_id → flow_definition → instance + logs
-        """
+        """Execute a journey directly for testing, without a webhook event."""
         logger.info("ExecutionEngine.test_execution – journey=%s lead=%d stage=%s", journey_id, lead_id, stage_key)
         return await self._execute_for_stage(str(lead_id), stage_key)
-
-    # ------------------------------------------------------------------
-    # Public entry points – one per event type
-    # ------------------------------------------------------------------
 
     async def handle_lead_created(self, event: LeadCreatedEvent) -> bool:
         """Handle a lead.created event."""
@@ -117,13 +111,23 @@ class ExecutionEngine:
     # ------------------------------------------------------------------
 
     async def _execute_for_stage(self, lead_id: str, stage_key: str) -> bool:
-        """Core orchestration shared by all event types."""
+        """Core orchestration shared by all event types.
+
+        Flow:
+            1. Load stage mappings for the given stage_key
+            2. For each active journey, create a running instance
+            3. Load the published flow definition
+            4. Dispatch the trigger node through its executor
+            5. Traverse the remaining graph, dispatching every node
+               through its registered executor
+        """
         async with self._session_factory() as session:
             try:
                 repo = StageMappingRepository(session)
                 journey_service = JourneyService(session)
                 instance_service = RunningInstanceService(session)
                 log_service = FlowExecutionLogService(session)
+                lead_provider: LeadProvider = LeadProviderFactory.get_provider()
 
                 # 1. Find matching stage mappings
                 mappings = await repo.get_by_stage_key(stage_key)
@@ -132,6 +136,10 @@ class ExecutionEngine:
                     return True
 
                 any_triggered = False
+
+                # Resolve lead context once (shared across journeys for this lead)
+                lead_context = await lead_provider.get_lead_context(int(lead_id))
+                execution_time = datetime.utcnow()
 
                 for mapping in mappings:
                     # 2. Load the linked Journey (must be active)
@@ -154,9 +162,8 @@ class ExecutionEngine:
                     )
                     instance = await instance_service.create(instance_schema)
 
-                    # 4. Load the published FlowDefinition via the explicit FK
+                    # 4. Load the published FlowDefinition
                     flow_def = await self._load_flow_definition(journey)
-
                     if flow_def is None:
                         logger.error(
                             "Journey %s has no flow_definition_id — stopping execution for instance %s",
@@ -164,30 +171,59 @@ class ExecutionEngine:
                         )
                         continue
 
-                    # 5. Determine the first node to execute (trigger node)
+                    # 5. Build rich ExecutionContext
+                    ctx_dict: Dict[str, Any] = {
+                        "trigger_stage_key": stage_key,
+                        "flow_definition_id": str(flow_def.id),
+                    }
+                    node_outputs: Dict[str, Any] = {}
+                    exec_ctx = ExecutionContext(
+                        lead_id=int(lead_id),
+                        lead=lead_context.get("lead", {}),
+                        company=lead_context.get("company"),
+                        journey_name=journey.name or "",
+                        instance_id=str(instance.id),
+                        flow_definition_id=str(flow_def.id),
+                        execution_time=execution_time,
+                        node_outputs=node_outputs,
+                        context=ctx_dict,
+                    )
+                    # Wire resolver and renderer AFTER creation (circular ref not needed)
+                    resolver = VariableResolverService(exec_ctx.to_dict())
+                    renderer = TemplateRendererService(resolver)
+                    object.__setattr__(exec_ctx, "resolver", resolver)
+                    object.__setattr__(exec_ctx, "renderer", renderer)
+                    object.__setattr__(exec_ctx, "template_service", TemplateService(session))
+
+                    # 6. Resolve the first node (trigger) and execute it
                     first_node_id = self._resolve_first_node(flow_def.definition)
 
-                    # 6. Create the first flow execution log
-                    log_schema = FlowExecutionLogCreateSchema(
-                        flow_definition_id=str(flow_def.id),
-                        running_instance_id=instance.id,
-                        lead_id=int(lead_id),
-                        node_id=first_node_id,
-                        status="success",
-                        input={"event": "lead.stage_changed", "stage_key": stage_key, "lead_id": lead_id},
-                        output={},
-                    )
-                    await log_service.create(log_schema)
+                    trigger_node = self._find_node_by_id(flow_def.definition, first_node_id)
+                    if trigger_node:
+                        continue_traversal = await self._execute_node(
+                            node=trigger_node,
+                            instance=instance,
+                            flow_def_id=str(flow_def.id),
+                            lead_id=int(lead_id),
+                            context=ctx_dict,
+                            exec_ctx=exec_ctx,
+                            log_service=log_service,
+                            instance_service=instance_service,
+                        )
 
-                    # 7. Traverse the rest of the flow nodes (post-trigger)
-                    await self._traverse_flow(
-                        definition=flow_def.definition,
-                        instance_id=instance.id,
-                        flow_def_id=str(flow_def.id),
-                        lead_id=int(lead_id),
-                        start_node_id=first_node_id,
-                        session=session,
-                    )
+                        # 7. Traverse remaining nodes only if trigger succeeded
+                        if continue_traversal:
+                            await self._traverse_flow(
+                                definition=flow_def.definition,
+                                instance=instance,
+                                flow_def_id=str(flow_def.id),
+                                lead_id=int(lead_id),
+                                start_node_id=first_node_id,
+                                context=ctx_dict,
+                                exec_ctx=exec_ctx,
+                                log_service=log_service,
+                                instance_service=instance_service,
+                            )
 
                     logger.info(
                         "Journey %s activated for lead %s – instance=%s flow=%s first_node=%s",
@@ -202,31 +238,247 @@ class ExecutionEngine:
                 return False
 
     # ------------------------------------------------------------------
+    # Node execution dispatcher
+    # ------------------------------------------------------------------
+
+    async def _execute_node(
+        self,
+        node: Dict[str, Any],
+        instance: Any,
+        flow_def_id: str,
+        lead_id: int,
+        context: Dict[str, Any],
+        log_service: FlowExecutionLogService,
+        instance_service: RunningInstanceService,
+        exec_ctx: Optional[ExecutionContext] = None,
+    ) -> bool:
+        """Execute a single node through its registered executor.
+
+        Creates Started → Success|Failed execution logs with duration.
+        Updates the running instance's data with current_node_id and
+        last_executed_at.
+
+        Returns:
+            True if traversal should continue to the next node.
+            False if traversal should stop (failure or end node reached).
+        """
+        node_id = node.get("id", "")
+        node_type = node.get("type", "")
+        started_at = datetime.utcnow()
+
+        # ── Started log ──────────────────────────────────────────────
+        await log_service.create(
+            FlowExecutionLogCreateSchema(
+                flow_definition_id=flow_def_id,
+                running_instance_id=instance.id,
+                lead_id=lead_id,
+                node_id=node_id,
+                status="started",
+                input={"node_type": node_type},
+                output={},
+            )
+        )
+
+        # ── Resolve executor ────────────────────────────────────────
+        try:
+            executor = ExecutorFactory.get(node_type)
+        except ValueError:
+            logger.error("Unknown node type %s for node %s", node_type, node_id)
+            await self._create_failed_log(
+                log_service, flow_def_id, instance.id, lead_id,
+                node_id, node_type, f"Unknown node type: {node_type}", started_at,
+            )
+            await instance_service.fail(UUID(instance.id))
+            return False
+
+        # ── Dispatch to executor ────────────────────────────────────
+        try:
+            result = await executor.execute(node, instance, lead_id, context, exec_ctx=exec_ctx)
+        except Exception as exc:
+            logger.exception("Executor %s raised exception for node %s", node_type, node_id)
+            await self._create_failed_log(
+                log_service, flow_def_id, instance.id, lead_id,
+                node_id, node_type, str(exc), started_at,
+            )
+            await instance_service.fail(UUID(instance.id))
+            return False
+
+        completed_at = datetime.utcnow()
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+
+        # ── Handle result ───────────────────────────────────────────
+        if result.success:
+            output_data = result.output or {}
+            output_data.pop("log_payload", None)
+
+            # Success log
+            await log_service.create(
+                FlowExecutionLogCreateSchema(
+                    flow_definition_id=flow_def_id,
+                    running_instance_id=instance.id,
+                    lead_id=lead_id,
+                    node_id=node_id,
+                    status="success",
+                    input={
+                        "node_type": node_type,
+                        "started_at": started_at.isoformat(),
+                    },
+                    output={
+                        "completed_at": completed_at.isoformat(),
+                        "duration_ms": duration_ms,
+                        **output_data,
+                    },
+                )
+            )
+
+            # Update execution context
+            if result.updated_context:
+                context.update(result.updated_context)
+                if exec_ctx and exec_ctx.context:
+                    exec_ctx.context.update(result.updated_context)
+
+            # Store node output for downstream variable resolution
+            if exec_ctx and exec_ctx.node_outputs is not None:
+                exec_ctx.node_outputs[str(node_id)] = output_data
+
+            # Update running instance — store current node tracking
+            # in the JSON data column (no schema migration needed)
+            current_data = dict(instance.data or {})
+            current_data["current_node_id"] = node_id
+            current_data["last_executed_at"] = completed_at.isoformat()
+
+            # Handle skipped (pause/wait/delay/approval/task) nodes — stop traversal
+            if result.status == "skipped":
+                updated_ctx = result.updated_context or {}
+                halt = updated_ctx.get("_halt")
+                resume_at = updated_ctx.get("resume_at")
+
+                if halt == "approval":
+                    approval_data = updated_ctx.get("_approval_data")
+                    if approval_data:
+                        approvals = current_data.get("approvals") or {}
+                        approvals[approval_data["id"]] = approval_data
+                        current_data["approvals"] = approvals
+                        current_data["current_approval_id"] = approval_data["id"]
+                    current_data["_pause_reason"] = "approval"
+                    current_data["_pause_node_id"] = updated_ctx.get("_halt_node_id", node_id)
+                    await instance_service.wait_approval(UUID(instance.id), current_data)
+                    logger.info("Approval node %s — waiting for approval %s", node_id, updated_ctx.get("approval_id"))
+                elif halt == "task":
+                    task_data = updated_ctx.get("_task_data")
+                    if task_data:
+                        tasks = current_data.get("tasks") or {}
+                        tasks[task_data["id"]] = task_data
+                        current_data["tasks"] = tasks
+                        current_data["current_task_id"] = task_data["id"]
+                    current_data["_pause_reason"] = "task"
+                    current_data["_pause_node_id"] = updated_ctx.get("_halt_node_id", node_id)
+                    await instance_service.wait_task(UUID(instance.id), current_data)
+                    logger.info("ManualTask node %s — waiting for task %s", node_id, updated_ctx.get("task_id"))
+                elif resume_at:
+                    current_data["resume_at"] = resume_at
+                    if updated_ctx.get("_wait"):
+                        await instance_service.wait(UUID(instance.id), current_data)
+                        logger.info("Wait node %s paused until %s", node_id, resume_at)
+                    else:
+                        await instance_service.update(
+                            UUID(instance.id), RunningInstanceUpdateSchema(data=current_data),
+                        )
+                        logger.info("Delay node %s paused until %s", node_id, resume_at)
+                else:
+                    # Plain skip with no special handling — just update data
+                    await instance_service.update(
+                        UUID(instance.id), RunningInstanceUpdateSchema(data=current_data),
+                    )
+                return False
+
+            # Normal success — persist data and continue
+            await instance_service.update(
+                UUID(instance.id),
+                RunningInstanceUpdateSchema(data=current_data),
+            )
+            instance.data = current_data
+
+            # End node — mark completed and stop traversal
+            if node_type == "end":
+                await instance_service.complete(UUID(instance.id))
+                return False
+
+            return True
+
+        # Executor reported failure
+        await self._create_failed_log(
+            log_service, flow_def_id, instance.id, lead_id,
+            node_id, node_type, result.error or "Unknown error", started_at,
+        )
+        await instance_service.fail(UUID(instance.id))
+        return False
+
+    async def _create_failed_log(
+        self,
+        log_service: FlowExecutionLogService,
+        flow_def_id: str,
+        instance_id: str,
+        lead_id: int,
+        node_id: str,
+        node_type: str,
+        error_message: str,
+        started_at: datetime,
+    ) -> None:
+        """Create a failed execution log with computed duration."""
+        completed_at = datetime.utcnow()
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+        await log_service.create(
+            FlowExecutionLogCreateSchema(
+                flow_definition_id=flow_def_id,
+                running_instance_id=instance_id,
+                lead_id=lead_id,
+                node_id=node_id,
+                status="failed",
+                input={
+                    "node_type": node_type,
+                    "started_at": started_at.isoformat(),
+                },
+                output={
+                    "completed_at": completed_at.isoformat(),
+                    "duration_ms": duration_ms,
+                },
+                error_message=error_message,
+            )
+        )
+
+    # ------------------------------------------------------------------
     # Flow traversal
     # ------------------------------------------------------------------
 
     async def _traverse_flow(
         self,
         definition: Dict[str, Any],
-        instance_id: str,
+        instance: Any,
         flow_def_id: str,
         lead_id: int,
         start_node_id: str,
-        session,
+        context: Dict[str, Any],
+        log_service: FlowExecutionLogService,
+        instance_service: RunningInstanceService,
+        exec_ctx: Optional[ExecutionContext] = None,
     ) -> None:
-        """Walk through the flow graph starting from edges out of *start_node_id*.
+        """Walk through the flow graph dispatching every node to its executor.
 
-        Each visited node (except the start node itself, which was already
-        logged as the trigger) gets a ``FlowExecutionLog``.  When an ``end``
-        node is reached, the running instance is marked completed and traversal
-        stops.
+        Builds an adjacency list from ``definition["edges"]`` and BFS-traverses
+        starting from the neighbours of *start_node_id* (the trigger node was
+        already executed by the caller).
+
+        Traversal stops when:
+        * An end node is reached (executor returns ``next_node_id=None``).
+        * Any executor fails.
         """
         nodes = definition.get("nodes") or []
         edges = definition.get("edges") or []
 
         node_map: Dict[str, Any] = {n["id"]: n for n in nodes}
 
-        # build adjacency: node_id -> list of next node IDs
+        # Build adjacency: source node -> list of target node IDs
         adjacency: Dict[str, list] = {}
         for edge in edges:
             src = edge.get("source")
@@ -234,11 +486,8 @@ class ExecutionEngine:
             if src and tgt:
                 adjacency.setdefault(src, []).append(tgt)
 
-        log_service = FlowExecutionLogService(session)
-        instance_service = RunningInstanceService(session)
-
-        queue = list(adjacency.get(start_node_id, []))
-        visited = {start_node_id}
+        queue: list = list(adjacency.get(start_node_id, []))
+        visited: set = {start_node_id}
 
         while queue:
             node_id = queue.pop(0)
@@ -250,36 +499,167 @@ class ExecutionEngine:
             if not node:
                 continue
 
-            node_type = node.get("type", "")
-
-            if node_type == "end":
-                await instance_service.complete(UUID(instance_id))
-                log_schema = FlowExecutionLogCreateSchema(
-                    flow_definition_id=flow_def_id,
-                    running_instance_id=instance_id,
-                    lead_id=lead_id,
-                    node_id=node_id,
-                    status="success",
-                    input={},
-                    output={},
-                )
-                await log_service.create(log_schema)
-                return
-
-            await log_service.create(
-                FlowExecutionLogCreateSchema(
-                    flow_definition_id=flow_def_id,
-                    running_instance_id=instance_id,
-                    lead_id=lead_id,
-                    node_id=node_id,
-                    status="success",
-                    input={},
-                    output={},
-                )
+            should_continue = await self._execute_node(
+                node=node,
+                instance=instance,
+                flow_def_id=flow_def_id,
+                lead_id=lead_id,
+                context=context,
+                exec_ctx=exec_ctx,
+                log_service=log_service,
+                instance_service=instance_service,
             )
+
+            if not should_continue:
+                return
 
             next_nodes = adjacency.get(node_id, [])
             queue.extend(next_nodes)
+
+    # ------------------------------------------------------------------
+    # Resume & Retry
+    # ------------------------------------------------------------------
+
+    async def resume_instance(self, instance_id: UUID) -> bool:
+        """Resume a waiting instance from its ``current_node_id``.
+
+        The current node (wait/delay) is **skipped** — traversal continues
+        to its downstream neighbours.  Used by :class:`SchedulerService`.
+        """
+        return await self._resume_from(instance_id, skip_current=True)
+
+    async def retry_node(self, instance_id: UUID) -> bool:
+        """Re-execute the failed node and continue traversal.
+
+        ``instance.data.retry_count`` is incremented by the caller
+        (:class:`RetryService`).  The current node is re-executed.
+        """
+        return await self._resume_from(instance_id, skip_current=False)
+
+    async def retry_journey(self, instance_id: UUID) -> bool:
+        """Restart the entire journey from the trigger node.
+
+        ``instance.data.current_node_id`` is set to *None* by the caller
+        so that the trigger node is resolved as the starting point.
+        """
+        return await self._resume_from(instance_id, skip_current=False)
+
+    async def _resume_from(self, instance_id: UUID, skip_current: bool) -> bool:
+        """Shared resume logic used by the scheduler and retry flows.
+
+        When *skip_current* is True the node at ``current_node_id`` is
+        skipped (traversal begins at its neighbours).  When False the
+        node is re-executed first.
+        """
+        async with self._session_factory() as session:
+            try:
+                journey_service = JourneyService(session)
+                instance_service = RunningInstanceService(session)
+                log_service = FlowExecutionLogService(session)
+                lead_provider: LeadProvider = LeadProviderFactory.get_provider()
+
+                instance = await instance_service.get(instance_id)
+                journey = await journey_service.get(UUID(instance.journey_id))
+
+                flow_def = await self._load_flow_definition(journey)
+                if flow_def is None:
+                    return False
+
+                lead_context = await lead_provider.get_lead_context(instance.lead_id)
+                execution_time = datetime.utcnow()
+
+                instance_data = dict(instance.data or {})
+                ctx_dict: Dict[str, Any] = {
+                    "trigger_stage_key": instance_data.get("trigger_stage_key", "unknown"),
+                    "flow_definition_id": str(flow_def.id),
+                }
+                ctx_dict.update(instance_data)
+                node_outputs: Dict[str, Any] = {}
+
+                exec_ctx = ExecutionContext(
+                    lead_id=instance.lead_id,
+                    lead=lead_context.get("lead", {}),
+                    company=lead_context.get("company"),
+                    journey_name=journey.name or "",
+                    instance_id=str(instance.id),
+                    flow_definition_id=str(flow_def.id),
+                    execution_time=execution_time,
+                    node_outputs=node_outputs,
+                    context=ctx_dict,
+                )
+                resolver = VariableResolverService(exec_ctx.to_dict())
+                renderer = TemplateRendererService(resolver)
+                object.__setattr__(exec_ctx, "resolver", resolver)
+                object.__setattr__(exec_ctx, "renderer", renderer)
+                object.__setattr__(exec_ctx, "template_service", TemplateService(session))
+
+                # Determine starting node
+                start_node_id = instance_data.get("current_node_id")
+                if not start_node_id:
+                    start_node_id = self._resolve_first_node(flow_def.definition)
+
+                start_node = self._find_node_by_id(flow_def.definition, start_node_id)
+                if not start_node:
+                    logger.error(
+                        "Resume start node %s not found for instance %s",
+                        start_node_id, instance_id,
+                    )
+                    await instance_service.fail(instance_id)
+                    return False
+
+                # Clean up resume metadata from instance data
+                clean_data = dict(instance_data)
+                clean_data.pop("resume_at", None)
+
+                if skip_current:
+                    # Schedule mode: skip current node, traverse from neighbours
+                    # First update instance data to remove resume_at
+                    await instance_service.update(
+                        instance_id, RunningInstanceUpdateSchema(data=clean_data),
+                    )
+                    await self._traverse_flow(
+                        definition=flow_def.definition,
+                        instance=instance,
+                        flow_def_id=str(flow_def.id),
+                        lead_id=instance.lead_id,
+                        start_node_id=start_node_id,
+                        context=ctx_dict,
+                        exec_ctx=exec_ctx,
+                        log_service=log_service,
+                        instance_service=instance_service,
+                    )
+                else:
+                    # Retry mode: execute the current node then traverse
+                    continue_traversal = await self._execute_node(
+                        node=start_node,
+                        instance=instance,
+                        flow_def_id=str(flow_def.id),
+                        lead_id=instance.lead_id,
+                        context=ctx_dict,
+                        exec_ctx=exec_ctx,
+                        log_service=log_service,
+                        instance_service=instance_service,
+                    )
+                    if continue_traversal:
+                        await self._traverse_flow(
+                            definition=flow_def.definition,
+                            instance=instance,
+                            flow_def_id=str(flow_def.id),
+                            lead_id=instance.lead_id,
+                            start_node_id=start_node_id,
+                            context=ctx_dict,
+                            exec_ctx=exec_ctx,
+                            log_service=log_service,
+                            instance_service=instance_service,
+                        )
+
+                return True
+
+            except Exception as exc:
+                logger.exception(
+                    "Engine._resume_from error for instance %s: %s", instance_id, exc,
+                )
+                return False
 
     # ------------------------------------------------------------------
     # Helpers
@@ -333,3 +713,12 @@ class ExecutionEngine:
                 return node.get("id", "trigger")
 
         return nodes[0].get("id", "trigger")
+
+    @staticmethod
+    def _find_node_by_id(definition: Dict[str, Any], node_id: str) -> Optional[Dict[str, Any]]:
+        """Return the node dict matching *node_id*, or None."""
+        nodes = definition.get("nodes") if definition else []
+        for node in nodes:
+            if node.get("id") == node_id:
+                return node
+        return None

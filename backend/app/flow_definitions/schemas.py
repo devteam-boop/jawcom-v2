@@ -1,6 +1,6 @@
 """Pydantic schemas for Flow Definition Engine."""
 
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -87,3 +87,18 @@ class FlowExecutionLogCreateSchema(BaseModel):
     input: Optional[Dict[str, Any]] = Field(default={}, description="Input data")
     output: Optional[Dict[str, Any]] = Field(default={}, description="Output data")
     error_message: Optional[str] = Field(None, description="Error message if failed")
+
+
+# ── Flow Validation ───────────────────────────────────────────────
+
+
+class ValidationIssue(BaseModel):
+    type: str = Field(..., description="Category: graph or node")
+    node_id: Optional[str] = Field(None, description="Node ID the issue relates to")
+    message: str = Field(..., description="Human-readable description of the issue")
+
+
+class ValidationResult(BaseModel):
+    valid: bool = Field(..., description="True when there are zero errors")
+    errors: List[ValidationIssue] = Field(default_factory=list, description="Blocking issues")
+    warnings: List[ValidationIssue] = Field(default_factory=list, description="Non-blocking suggestions")

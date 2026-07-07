@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional,Any
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +9,9 @@ from app.flow_definitions.schemas import (
     FlowDefinitionSchema,
     FlowDefinitionCreateSchema,
     FlowDefinitionUpdateSchema,
+    ValidationResult,
 )
+from app.services.flow_validation_service import FlowValidationService
 
 
 class FlowDefinitionService:
@@ -58,10 +60,21 @@ class FlowDefinitionService:
         definitions = await self.repo.get_all(skip=skip, limit=limit, status=status)
         return [self._to_schema(d) for d in definitions]
 
+    async def validate(self, definition_id: UUID) -> Dict[str, Any]:
+        definition = await self.repo.get(definition_id)
+        if not definition:
+            raise ValueError(f"FlowDefinition {definition_id} not found")
+        return FlowValidationService.validate(definition.definition or {})
+
     async def publish(self, definition_id: UUID) -> FlowDefinitionSchema:
         definition = await self.repo.get(definition_id)
         if not definition:
             raise ValueError(f"FlowDefinition {definition_id} not found")
+
+        result = FlowValidationService.validate(definition.definition or {})
+        if not result["valid"]:
+            raise ValueError(result)
+
         definition.status = FlowDefinitionStatus.PUBLISHED.value
         updated = await self.repo.update(definition)
         return self._to_schema(updated)

@@ -10,6 +10,8 @@ class InstanceStatus(str, enum.Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     WAITING = "waiting"
+    WAITING_APPROVAL = "waiting_approval"
+    WAITING_TASK = "waiting_task"
 
 
 class RunningJourneyInstance(Base, BaseModel):

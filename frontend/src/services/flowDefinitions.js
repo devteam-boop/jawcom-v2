@@ -15,6 +15,8 @@ export const flowDefinitionService = {
 
   delete: async (id) => api.del(`/api/flow-definitions/${id}`),
 
+  validate: async (id) => api.post(`/api/flow-definitions/${id}/validate`),
+
   publish: async (id) => api.post(`/api/flow-definitions/${id}/publish`),
 
   archive: async (id) => api.post(`/api/flow-definitions/${id}/archive`),

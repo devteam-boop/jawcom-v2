@@ -14,12 +14,12 @@ export default function AppLayout() {
         mobileOpen={mobileOpen}
         onCloseMobile={() => setMobileOpen(false)}
       />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Header
           onToggleSidebar={() => setCollapsed((c) => !c)}
           onOpenMobile={() => setMobileOpen(true)}
         />
-        <main className="flex-1" data-testid="main-content">
+        <main className="min-h-0 flex-1 overflow-y-auto" data-testid="main-content">
           <Outlet />
         </main>
       </div>

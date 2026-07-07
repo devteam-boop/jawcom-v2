@@ -1,13 +1,19 @@
 """Notification node executor.
 
-Sends an internal alert to workspace operators. For Sprint 2 this is a
-dummy execution that only creates an execution log and returns success.
+Resolves ``{{variable}}`` placeholders in title and message,
+builds a request payload, and delegates dispatching to
+:class:`NotificationIntegration <app.integrations.NotificationIntegration>`.
+
+Configuration (node.config):
+    title (str): Notification title (supports ``{{variable}}``).
+    message (str): Notification body message (supports ``{{variable}}``).
 """
 
 import logging
 from datetime import datetime
 from typing import Any, Dict
 
+from app.integrations import IntegrationFactory
 from .base import BaseNodeExecutor, ExecutionResult
 from .utils import build_log_payload
 
@@ -27,22 +33,39 @@ class NotificationExecutor(BaseNodeExecutor):
         running_instance: Any,
         lead_id: int,
         context: Dict[str, Any],
+        exec_ctx: Any = None,
     ) -> ExecutionResult:
         started_at = datetime.utcnow()
-        node_data = node.get("data") or {}
+        node_config = node.get("config") or {}
         node_id = node.get("id", "notification")
 
-        channel = node_data.get("channel", "in-app")
-        message = node_data.get("message", "")
+        renderer = getattr(exec_ctx, "renderer", None) if exec_ctx else None
+        raw_title = node_config.get("title", "")
+        raw_message = node_config.get("message", "")
+
+        resolved_title = renderer.render(raw_title) if renderer else raw_title
+        resolved_message = renderer.render(raw_message) if renderer else raw_message
 
         logger.info(
-            "NotificationExecutor: dummy notification for lead=%s node=%s channel=%s",
-            lead_id, node_id, channel,
+            "NotificationExecutor: resolved notification for lead=%s node=%s title=%s",
+            lead_id, node_id, resolved_title,
         )
 
+        # ── Build integration request ──────────────────────────────
+        request_payload = {
+            "title": resolved_title,
+            "message": resolved_message,
+        }
+        integration = IntegrationFactory.get("notification")
+        integration_response = await integration.execute(request_payload)
+
         output_data = {
-            "message": message or "Operator notification simulated",
-            "channel": channel,
+            "message": resolved_message or "Operator notification simulated",
+            "resolved_title": resolved_title,
+            "resolved_message": resolved_message,
+            "raw_title": raw_title,
+            "raw_message": raw_message,
+            "provider_response": integration_response,
         }
 
         output = {
@@ -53,7 +76,7 @@ class NotificationExecutor(BaseNodeExecutor):
                 node_id=node_id,
                 node_type=self.node_type,
                 status="success",
-                input_data={"notification_config": node_data},
+                input_data={"notification_config": node_config},
                 output_data=output_data,
                 started_at=started_at,
             ),

@@ -1,17 +1,30 @@
 """Delay node executor.
 
-For Sprint 2 the delay is also skipped in test mode: we log the configured
-duration and return success without blocking the traversal.
+Delay nodes pause internal execution for a set duration. Unlike Wait nodes,
+they do NOT transition the instance to ``waiting`` status — the instance
+stays ``running`` with a ``resume_at`` timestamp stored in its data.
+The scheduler silently resumes traversal when the delay expires.
+
+Configuration (node.config):
+    duration (int): The delay duration.
+    unit (str): Unit of duration (minutes, hours, days, weeks).
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict
 
 from .base import BaseNodeExecutor, ExecutionResult
 from .utils import build_log_payload
 
 logger = logging.getLogger(__name__)
+
+UNIT_SECONDS: Dict[str, int] = {
+    "minutes": 60,
+    "hours": 3600,
+    "days": 86400,
+    "weeks": 604800,
+}
 
 
 class DelayExecutor(BaseNodeExecutor):
@@ -27,23 +40,29 @@ class DelayExecutor(BaseNodeExecutor):
         running_instance: Any,
         lead_id: int,
         context: Dict[str, Any],
+        exec_ctx: Any = None,
     ) -> ExecutionResult:
         started_at = datetime.utcnow()
-        node_data = node.get("data") or {}
+        node_config = node.get("config") or {}
         node_id = node.get("id", "delay")
 
-        duration = node_data.get("duration", 0)
-        unit = node_data.get("unit", "minutes")
+        duration = node_config.get("duration", 0)
+        unit = node_config.get("unit", "minutes")
+
+        total_seconds = duration * UNIT_SECONDS.get(unit, 60)
+        resume_at = datetime.utcnow() + timedelta(seconds=total_seconds)
+        resume_at_iso = resume_at.isoformat()
 
         logger.info(
-            "DelayExecutor: delay of %s %s skipped in test mode for lead=%s node=%s",
-            duration, unit, lead_id, node_id,
+            "DelayExecutor: delaying %s %s until %s for lead=%s node=%s",
+            duration, unit, resume_at_iso, lead_id, node_id,
         )
 
         output_data = {
             "duration": duration,
             "unit": unit,
-            "message": "Delay skipped in test mode",
+            "resume_at": resume_at_iso,
+            "message": f"Delaying {duration} {unit} until {resume_at_iso}",
         }
 
         output = {
@@ -54,7 +73,7 @@ class DelayExecutor(BaseNodeExecutor):
                 node_id=node_id,
                 node_type=self.node_type,
                 status="success",
-                input_data={"delay_config": node_data},
+                input_data={"delay_config": node_config},
                 output_data=output_data,
                 started_at=started_at,
             ),
@@ -63,7 +82,7 @@ class DelayExecutor(BaseNodeExecutor):
 
         return ExecutionResult(
             success=True,
-            updated_context=context,
-            status="success",
+            updated_context={"resume_at": resume_at_iso},
+            status="skipped",
             output=output,
         )

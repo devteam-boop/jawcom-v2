@@ -20,4 +20,8 @@ export const runningInstanceService = {
   complete: async (id) => api.post(`/api/running-instances/${id}/complete`),
 
   fail: async (id) => api.post(`/api/running-instances/${id}/fail`),
+
+  retry: async (id, mode = "node") => api.post(`/api/running-instances/${id}/retry?mode=${mode}`),
+
+  resume: async (id) => api.post(`/api/running-instances/${id}/resume`),
 };

@@ -4,78 +4,167 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import { TEMPLATES } from "@/dummy-data/templates";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { useTemplates } from "@/modules/templates";
+import { templateService } from "@/services/templates";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import {
   Plus,
   Copy,
   Archive,
-  Play,
-  CheckCircle2,
-  XCircle,
+  Trash2,
+  Pencil,
   Search,
   FileText,
   Mail,
   MessageCircle,
-  Instagram,
-  Phone,
-  Facebook,
   MessageSquare,
+  Bell,
 } from "lucide-react";
 
-const FOLDERS = [
-  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle, source: TEMPLATES.whatsapp, channel: "WhatsApp" },
-  { key: "email", label: "Email", icon: Mail, source: TEMPLATES.email, channel: "Email" },
-  { key: "sms", label: "SMS", icon: MessageSquare, source: TEMPLATES.sms, channel: "SMS" },
-  { key: "instagram", label: "Instagram", icon: Instagram, source: [
-    { id: "ti1", name: "IG welcome DM", preview: "Hey {{first_name}} — thanks for the follow! Here's a peek at what we do.", language: "EN", category: "Marketing", status: "Approved", lastEdited: "Feb 4", version: "v1.3" },
-    { id: "ti2", name: "Product tag reply", preview: "Great pick, {{first_name}}! Tap the link in bio to grab yours.", language: "EN", category: "Utility", status: "In Review", lastEdited: "Today", version: "v0.2" },
-  ], channel: "Instagram" },
-  { key: "messenger", label: "Messenger", icon: Facebook, source: [
-    { id: "tm1", name: "Support handoff", preview: "Hi {{first_name}}, connecting you with a specialist now.", language: "EN", category: "Support", status: "Approved", lastEdited: "Jan 18", version: "v2.0" },
-    { id: "tm2", name: "Offer nudge", preview: "Still deciding, {{first_name}}? Here's a 10% loyalty code: {{code}}.", language: "EN", category: "Marketing", status: "Draft", lastEdited: "Today", version: "v0.1" },
-  ], channel: "Messenger" },
-  { key: "voice", label: "Voice", icon: Phone, source: TEMPLATES.voice, channel: "Voice" },
+const CHANNELS = [
+  { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
+  { key: "email", label: "Email", icon: Mail },
+  { key: "sms", label: "SMS", icon: MessageSquare },
+  { key: "push", label: "Push", icon: Bell },
 ];
 
 const STATUS_META = {
-  Approved: { badge: "Active", tone: "success" },
-  "In Review": { badge: "Open", tone: "info" },
-  Pending: { badge: "Open", tone: "info" },
-  Draft: { badge: "Draft", tone: "neutral" },
-  Rejected: { badge: "Lost", tone: "danger" },
-  Archived: { badge: "Closed", tone: "neutral" },
+  draft: { badge: "Draft", tone: "neutral" },
+  active: { badge: "Active", tone: "success" },
+  inactive: { badge: "Archived", tone: "neutral" },
 };
 
-function normalize(t) {
-  return {
-    ...t,
-    version: t.version || "v1.0",
-    updatedBy: "Maya Iyer",
-    variables: extractVars(t.preview),
-  };
-}
-
-function extractVars(text = "") {
+function extractVars(content = "") {
   const set = new Set();
   const re = /\{\{(\w+)\}\}/g;
   let m;
-  while ((m = re.exec(text)) !== null) set.add(m[1]);
+  while ((m = re.exec(content)) !== null) set.add(m[1]);
   return Array.from(set);
 }
+
+function previewContent(content) {
+  if (!content) return content;
+  return content.replace(/\{\{(\w+)\}\}/g, (match, name) => `«${name}»`);
+}
+
+const EMPTY_FORM = { name: "", channel: "whatsapp", subject: "", content: "" };
 
 export default function Templates() {
   const [folder, setFolder] = useState("whatsapp");
   const [query, setQuery] = useState("");
-  const active = FOLDERS.find((f) => f.key === folder);
-  const templates = useMemo(() => (active?.source || []).map(normalize), [active]);
+  const { templates, loading, refetch } = useTemplates(folder);
+  const [selectedId, setSelectedId] = useState(null);
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
   const filtered = useMemo(
-    () => templates.filter((t) => !query || `${t.name} ${t.preview}`.toLowerCase().includes(query.toLowerCase())),
+    () => templates.filter((t) => !query || `${t.name} ${t.content}`.toLowerCase().includes(query.toLowerCase())),
     [templates, query]
   );
-  const [selectedId, setSelectedId] = useState(filtered[0]?.id);
-  const selected = filtered.find((t) => t.id === selectedId) || filtered[0];
+  const selected = filtered.find((t) => t.id === selectedId) || filtered[0] || null;
+  const activeChannel = CHANNELS.find((f) => f.key === folder);
+
+  const openCreate = () => {
+    setEditingId(null);
+    setForm({ ...EMPTY_FORM, channel: folder });
+    setFormOpen(true);
+  };
+
+  const openEdit = (template) => {
+    setEditingId(template.id);
+    setForm({
+      name: template.name,
+      channel: template.channel,
+      subject: template.subject || "",
+      content: template.content,
+    });
+    setFormOpen(true);
+  };
+
+  const handleSave = async () => {
+    if (!form.name.trim() || !form.content.trim()) {
+      toast.error("Name and content are required");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        channel: form.channel,
+        subject: form.channel === "email" ? form.subject : null,
+        content: form.content,
+      };
+      if (editingId) {
+        await templateService.update(editingId, payload);
+        toast.success("Template updated");
+      } else {
+        await templateService.create(payload);
+        toast.success("Template created");
+      }
+      setFormOpen(false);
+      await refetch();
+    } catch (err) {
+      toast.error(err.message || "Failed to save template");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDuplicate = async (template) => {
+    try {
+      await templateService.duplicate(template.id);
+      toast.success("Template duplicated");
+      await refetch();
+    } catch (err) {
+      toast.error(err.message || "Failed to duplicate template");
+    }
+  };
+
+  const handleArchive = async (template) => {
+    try {
+      await templateService.archive(template.id);
+      toast.success("Template archived");
+      await refetch();
+    } catch (err) {
+      toast.error(err.message || "Failed to archive template");
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await templateService.delete(deleteTarget.id);
+      toast.success("Template deleted");
+      setDeleteTarget(null);
+      setSelectedId(null);
+      await refetch();
+    } catch (err) {
+      toast.error(err?.body?.detail || err.message || "Failed to delete template");
+    }
+  };
 
   return (
     <div data-testid="page-templates" className="flex h-full min-h-0 flex-col">
@@ -83,25 +172,24 @@ export default function Templates() {
         title="Template Library"
         description="Reusable, approved messages for every channel."
         actions={
-          <Button size="sm" data-testid="template-new">
+          <Button size="sm" onClick={openCreate} data-testid="template-new">
             <Plus className="mr-2 h-3.5 w-3.5" /> New template
           </Button>
         }
       />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[220px_1fr_320px]">
-        {/* Left: folders */}
+        {/* Left: channel folders */}
         <aside className="overflow-y-auto scrollbar-thin border-r border-border bg-card/40 p-3" data-testid="template-folders">
-          <div className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Folders</div>
+          <div className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Channels</div>
           <div className="space-y-1">
-            {FOLDERS.map((f) => {
+            {CHANNELS.map((f) => {
               const Icon = f.icon;
               const isActive = f.key === folder;
-              const count = f.source.length;
               return (
                 <button
                   key={f.key}
-                  onClick={() => { setFolder(f.key); setSelectedId(f.source[0]?.id); }}
+                  onClick={() => { setFolder(f.key); setSelectedId(null); }}
                   className={cn(
                     "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm",
                     isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -110,20 +198,9 @@ export default function Templates() {
                 >
                   <Icon className="h-3.5 w-3.5" />
                   <span className="flex-1 text-xs font-semibold">{f.label}</span>
-                  <span className="rounded bg-secondary px-1.5 text-[10px] font-semibold text-muted-foreground">{count}</span>
                 </button>
               );
             })}
-          </div>
-
-          <div className="mt-5 space-y-1">
-            <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Status</div>
-            {["Draft", "Pending", "Approved", "Rejected", "Archived"].map((s) => (
-              <div key={s} className="flex items-center justify-between rounded-md px-2 py-1 text-xs text-muted-foreground">
-                <span>{s}</span>
-                <StatusBadge status={STATUS_META[s]?.badge || "Draft"} tone={STATUS_META[s]?.tone} />
-              </div>
-            ))}
           </div>
         </aside>
 
@@ -134,44 +211,53 @@ export default function Templates() {
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search templates…" className="h-9 pl-9" data-testid="template-search" />
             </div>
-            <span className="text-xs text-muted-foreground">{filtered.length} in {active.label}</span>
+            <span className="text-xs text-muted-foreground">{filtered.length} in {activeChannel?.label}</span>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {filtered.map((t) => {
-              const isSel = t.id === selected?.id;
-              return (
-                <Card
-                  key={t.id}
-                  onClick={() => setSelectedId(t.id)}
-                  className={cn(
-                    "cursor-pointer rounded-xl border-border bg-card p-4 shadow-sm transition-colors",
-                    isSel ? "border-primary ring-2 ring-primary/15" : "hover:border-primary/30"
-                  )}
-                  data-testid={`template-card-${t.id}`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="inline-flex rounded-md bg-secondary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      {t.category}
-                    </span>
-                    <StatusBadge status={STATUS_META[t.status]?.badge || "Draft"} tone={STATUS_META[t.status]?.tone} />
-                  </div>
-                  <h3 className="mt-2 truncate text-sm font-bold">{t.name}</h3>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">{t.language} · {t.version} · Updated {t.lastEdited}</p>
-                  <div className="mt-3 rounded-lg border border-border bg-secondary/40 p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                    <div className="line-clamp-2">{t.preview.split("\n")[0]}</div>
-                  </div>
-                  {t.variables.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {t.variables.map((v) => (
-                        <span key={v} className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">{"{{"}{v}{"}}"}</span>
-                      ))}
+          {loading ? (
+            <div className="flex items-center justify-center p-12 text-sm text-muted-foreground">Loading…</div>
+          ) : filtered.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+              No templates yet for {activeChannel?.label}. Create one to get started.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {filtered.map((t) => {
+                const isSel = t.id === selected?.id;
+                const meta = STATUS_META[t.status] || STATUS_META.draft;
+                const variables = extractVars(t.content);
+                return (
+                  <Card
+                    key={t.id}
+                    onClick={() => setSelectedId(t.id)}
+                    className={cn(
+                      "cursor-pointer rounded-xl border-border bg-card p-4 shadow-sm transition-colors",
+                      isSel ? "border-primary ring-2 ring-primary/15" : "hover:border-primary/30"
+                    )}
+                    data-testid={`template-card-${t.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="inline-flex rounded-md bg-secondary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {t.channel}
+                      </span>
+                      <StatusBadge status={meta.badge} tone={meta.tone} />
                     </div>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
+                    <h3 className="mt-2 truncate text-sm font-bold">{t.name}</h3>
+                    <div className="mt-3 rounded-lg border border-border bg-secondary/40 p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                      <div className="line-clamp-2">{t.content}</div>
+                    </div>
+                    {variables.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {variables.map((v) => (
+                          <span key={v} className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-primary">{"{{"}{v}{"}}"}</span>
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </main>
 
         {/* Right: preview */}
@@ -180,14 +266,17 @@ export default function Templates() {
             <>
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-sm font-bold">Preview</h3>
-                <StatusBadge status={STATUS_META[selected.status]?.badge || "Draft"} tone={STATUS_META[selected.status]?.tone} />
+                <StatusBadge status={(STATUS_META[selected.status] || STATUS_META.draft).badge} tone={(STATUS_META[selected.status] || STATUS_META.draft).tone} />
               </div>
 
               <Card className="rounded-lg border-border bg-background p-3">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{active.channel} · {selected.language}</div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{selected.channel}</div>
                 <div className="mt-1 text-sm font-semibold">{selected.name}</div>
+                {selected.subject && (
+                  <div className="mt-1 text-xs text-muted-foreground">Subject: {previewContent(selected.subject)}</div>
+                )}
                 <div className="mt-3 rounded-lg border border-border bg-secondary/30 p-3 font-mono text-xs leading-relaxed">
-                  {selected.preview.split("\n").map((line, i) => <div key={i}>{line}</div>)}
+                  {previewContent(selected.content).split("\n").map((line, i) => <div key={i}>{line}</div>)}
                 </div>
               </Card>
 
@@ -197,60 +286,48 @@ export default function Templates() {
                   <TabsTrigger value="meta" className="text-xs">Metadata</TabsTrigger>
                 </TabsList>
                 <TabsContent value="vars" className="mt-3 space-y-2">
-                  {selected.variables.length === 0 ? (
+                  {extractVars(selected.content).length === 0 ? (
                     <div className="rounded-lg border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
                       No variables in this template
                     </div>
                   ) : (
-                    selected.variables.map((v) => (
+                    extractVars(selected.content).map((v) => (
                       <div key={v} className="flex items-center justify-between rounded-lg border border-border p-2.5">
                         <span className="font-mono text-xs font-semibold">{"{{"}{v}{"}}"}</span>
-                        <Input defaultValue={
-                          v === "first_name" ? "Priya" :
-                          v === "code" ? "SAVE10" :
-                          v === "date" ? "Feb 20" :
-                          v === "time" ? "3:00 PM" :
-                          v === "owner" ? "Maya" :
-                          v === "plan" ? "Growth" :
-                          v === "product" ? "Analytics" :
-                          v === "order_id" ? "JAW-4821" :
-                          v === "link" ? "jaw.co/x9" :
-                          v === "days" ? "7" :
-                          v === "workspace" ? "JawCom" :
-                          v === "year" ? "2026" :
-                          "sample"
-                        } className="h-7 max-w-[140px] font-mono text-xs" />
+                        <span className="font-mono text-xs text-muted-foreground">«{v}»</span>
                       </div>
                     ))
                   )}
                 </TabsContent>
                 <TabsContent value="meta" className="mt-3 space-y-2">
-                  <Row label="Approval status" value={<StatusBadge status={STATUS_META[selected.status]?.badge || "Draft"} tone={STATUS_META[selected.status]?.tone} />} />
-                  <Row label="Version" value={selected.version} />
-                  <Row label="Language" value={selected.language} />
-                  <Row label="Category" value={selected.category} />
-                  <Row label="Last updated" value={selected.lastEdited} />
-                  <Row label="Updated by" value={selected.updatedBy} />
+                  <Row label="Channel" value={selected.channel} />
+                  <Row label="Status" value={(STATUS_META[selected.status] || STATUS_META.draft).badge} />
+                  <Row label="Created" value={selected.created_at ? new Date(selected.created_at).toLocaleString() : "—"} />
+                  <Row label="Updated" value={selected.updated_at ? new Date(selected.updated_at).toLocaleString() : "—"} />
                 </TabsContent>
               </Tabs>
 
               <div className="mt-5 space-y-1.5">
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</div>
                 <div className="grid grid-cols-2 gap-1.5">
-                  <Button variant="outline" size="sm" className="h-8 text-xs" data-testid="tpl-duplicate">
+                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => openEdit(selected)} data-testid="tpl-edit">
+                    <Pencil className="mr-1 h-3 w-3" /> Edit
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => handleDuplicate(selected)} data-testid="tpl-duplicate">
                     <Copy className="mr-1 h-3 w-3" /> Duplicate
                   </Button>
-                  <Button variant="outline" size="sm" className="h-8 text-xs" data-testid="tpl-archive">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    disabled={selected.status === "inactive"}
+                    onClick={() => handleArchive(selected)}
+                    data-testid="tpl-archive"
+                  >
                     <Archive className="mr-1 h-3 w-3" /> Archive
                   </Button>
-                  <Button variant="outline" size="sm" className="h-8 text-xs" data-testid="tpl-test">
-                    <Play className="mr-1 h-3 w-3" /> Test
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-8 text-xs" data-testid="tpl-reject">
-                    <XCircle className="mr-1 h-3 w-3" /> Reject
-                  </Button>
-                  <Button size="sm" className="col-span-2 h-8 text-xs" data-testid="tpl-approve">
-                    <CheckCircle2 className="mr-1 h-3 w-3" /> Approve
+                  <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={() => setDeleteTarget(selected)} data-testid="tpl-delete">
+                    <Trash2 className="mr-1 h-3 w-3" /> Delete
                   </Button>
                 </div>
               </div>
@@ -262,6 +339,76 @@ export default function Templates() {
           )}
         </aside>
       </div>
+
+      {/* Create / Edit dialog */}
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingId ? "Edit Template" : "New Template"}</DialogTitle>
+            <DialogDescription>
+              Use <code>{"{{variable}}"}</code> placeholders — they resolve from lead/company data at send time.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Name</Label>
+                <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Welcome message" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Channel</Label>
+                <Select value={form.channel} onValueChange={(v) => setForm({ ...form, channel: v })} disabled={!!editingId}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CHANNELS.map((c) => (
+                      <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {form.channel === "email" && (
+              <div className="space-y-1.5">
+                <Label>Subject</Label>
+                <Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder="e.g. Welcome to {{company.name}}" />
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label>Content</Label>
+              <Textarea
+                value={form.content}
+                onChange={(e) => setForm({ ...form, content: e.target.value })}
+                placeholder="e.g. Hi {{lead.name}}, welcome aboard!"
+                rows={6}
+                className="font-mono text-xs"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving}>{editingId ? "Save changes" : "Create"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Template</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete "{deleteTarget?.name}"? This cannot be undone. Templates still
+              referenced by a stage mapping or a flow node cannot be deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

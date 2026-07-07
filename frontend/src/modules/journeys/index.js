@@ -2,6 +2,7 @@ export { default as JourneyList } from "./JourneyList";
 export { default as StageMapping } from "./StageMapping";
 export { default as JourneyDashboard } from "./JourneyDashboard";
 export { default as RunningInstances } from "./RunningInstances";
+export { default as ExecutionDrawer, INSTANCE_STATUS_TONE } from "./ExecutionDrawer";
 export { default as JourneySettings } from "./JourneySettings";
 export { default as TriggerConfiguration } from "./TriggerConfiguration";
 export { default as TestJourneyDialog } from "./TestJourneyDialog";

@@ -41,6 +41,51 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_JSON: bool = False
 
+    # Scheduler
+    SCHEDULER_ENABLED: bool = True
+    SCHEDULER_POLL_INTERVAL: int = 30
+
+    # Integrations (secrets loaded from environment)
+    WHATSAPP_API_KEY: Optional[str] = Field(
+        default=None, description="Meta WhatsApp Business API key",
+    )
+    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = Field(
+        default=None, description="Meta WhatsApp phone number ID",
+    )
+    WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(
+        default=None, description="Meta WhatsApp access token",
+    )
+    EMAIL_PROVIDER: str = Field(
+        default="smtp", description="Email provider (smtp, sendgrid, …)",
+    )
+    EMAIL_API_KEY: Optional[str] = Field(
+        default=None, description="Email provider API key",
+    )
+    EMAIL_SENDER: Optional[str] = Field(
+        default=None, description="Default sender email address",
+    )
+
+    # JAWIS
+    JAWIS_BASE_URL: Optional[str] = Field(
+        default=None, description="JAWIS API base URL, e.g. https://api.jawis.io",
+    )
+    JAWIS_API_KEY: Optional[str] = Field(
+        default=None, description="JAWIS API authentication key",
+    )
+    JAWIS_API_TOKEN: Optional[str] = Field(
+        default=None,
+        description="JAWIS Communication API bearer token (Sprint-1 messages/*.send endpoints)",
+    )
+    JAWIS_WORKSPACE: Optional[str] = Field(
+        default=None, description="JAWIS workspace / tenant ID",
+    )
+    JAWIS_LEAD_PROVIDER: str = Field(
+        default="dummy", description="Lead provider backend: dummy or jawis",
+    )
+    JAWIS_CRM_PROVIDER: str = Field(
+        default="dummy", description="CRM integration backend: dummy or jawis",
+    )
+
     # CORS
     CORS_ORIGINS: str = "*"
     CORS_ALLOW_CREDENTIALS: bool = True

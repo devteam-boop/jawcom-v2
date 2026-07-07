@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.dependencies import get_db_session
 from app.runtime.schemas import RunningInstanceSchema, RunningInstanceCreateSchema, RunningInstanceUpdateSchema
 from app.services.running_instance_service import RunningInstanceService
+from app.services.retry_service import RetryService
+from app.database.session import async_session_maker
 
 router = APIRouter(
     prefix="/api/running-instances",
@@ -116,3 +118,44 @@ async def fail_running_instance(
         return await service.fail(instance_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{instance_id}/retry", response_model=dict,
+             summary="Retry a failed instance",
+             description="Retries a failed journey instance. Supports two modes: "
+                         "'node' (default) re-executes the failed node, "
+                         "'journey' restarts the entire journey from the trigger node.")
+async def retry_running_instance(
+    instance_id: UUID,
+    mode: str = Query("node", regex="^(node|journey)$"),
+):
+    retry_service = RetryService(async_session_maker)
+    try:
+        if mode == "journey":
+            success = await retry_service.retry_journey(instance_id)
+        else:
+            success = await retry_service.retry_node(instance_id)
+        return {"success": success, "mode": mode, "instance_id": str(instance_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{instance_id}/resume", response_model=dict,
+             summary="Resume a waiting instance",
+             description="Resumes a waiting journey instance. The wait/delay node "
+                         "is skipped and traversal continues to the downstream nodes.")
+async def resume_running_instance(
+    instance_id: UUID,
+):
+    from app.execution.engine import ExecutionEngine
+
+    engine = ExecutionEngine(async_session_maker)
+    try:
+        success = await engine.resume_instance(instance_id)
+        return {"success": success, "instance_id": str(instance_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

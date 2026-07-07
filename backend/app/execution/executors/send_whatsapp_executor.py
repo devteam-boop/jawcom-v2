@@ -1,14 +1,23 @@
 """Send WhatsApp node executor.
 
-For Sprint 2 this executor does NOT call the WhatsApp API. It creates an
-execution log, sleeps 100ms to simulate network latency, and returns success.
+Resolves ``template_id`` to a real template (via ``exec_ctx.template_service``),
+renders ``{{variable}}`` placeholders, builds a request payload, and delegates
+sending to :class:`WhatsAppIntegration <app.integrations.WhatsAppIntegration>`.
+
+Configuration (node.config):
+    template_id (str): ID of the Template row to send (preferred).
+    template_name (str): Free-text template name — legacy fallback, used
+        only when ``template_id`` is absent.
+    variables (dict): Variable mappings for the template.
 """
 
 import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Dict
+from uuid import UUID
 
+from app.integrations import IntegrationFactory
 from .base import BaseNodeExecutor, ExecutionResult
 from .utils import build_log_payload
 
@@ -28,26 +37,51 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
         running_instance: Any,
         lead_id: int,
         context: Dict[str, Any],
+        exec_ctx: Any = None,
     ) -> ExecutionResult:
         started_at = datetime.utcnow()
-        node_data = node.get("data") or {}
+        node_config = node.get("config") or {}
         node_id = node.get("id", "send_whatsapp")
 
-        template_id = node_data.get("template_id", "welcome_whatsapp")
-        variable_mapping = node_data.get("variable_mapping", {})
+        renderer = getattr(exec_ctx, "renderer", None) if exec_ctx else None
+        template_service = getattr(exec_ctx, "template_service", None) if exec_ctx else None
+        template_id = node_config.get("template_id")
+        template_name = node_config.get("template_name", "")
+        raw_variables = node_config.get("variables", {})
+
+        if template_id and template_service:
+            template = await template_service.get_template(UUID(template_id))
+            resolved_template = template.name
+        else:
+            resolved_template = renderer.render(template_name) if renderer else template_name
+
+        resolved_variables = renderer.render_all(raw_variables) if renderer else raw_variables
 
         logger.info(
-            "SendWhatsAppExecutor: simulating send for lead=%s node=%s template=%s",
-            lead_id, node_id, template_id,
+            "SendWhatsAppExecutor: resolved template for lead=%s node=%s "
+            "template_id=%s template=%s variables=%s",
+            lead_id, node_id, template_id, resolved_template, resolved_variables,
         )
 
-        # Sprint 2 dummy behaviour: do not integrate external API.
         await asyncio.sleep(0.1)
 
+        # ── Build integration request ──────────────────────────────
+        request_payload = {
+            "template_name": resolved_template,
+            "variables": resolved_variables,
+            "recipient": getattr(running_instance, "lead_id", lead_id),
+        }
+        integration = IntegrationFactory.get("whatsapp")
+        integration_response = await integration.execute(request_payload)
+
         output_data = {
-            "message": "WhatsApp message simulated",
+            "message": f"WhatsApp message resolved (template: {resolved_template})",
+            "resolved_template_name": resolved_template,
+            "resolved_variables": resolved_variables,
             "template_id": template_id,
-            "variable_mapping": variable_mapping,
+            "raw_template_name": template_name,
+            "raw_variables": raw_variables,
+            "provider_response": integration_response,
         }
 
         output = {
@@ -58,7 +92,7 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
                 node_id=node_id,
                 node_type=self.node_type,
                 status="success",
-                input_data={"template_id": template_id},
+                input_data={"template_id": template_id, "template_name": template_name},
                 output_data=output_data,
                 started_at=started_at,
             ),

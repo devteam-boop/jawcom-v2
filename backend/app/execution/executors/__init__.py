@@ -14,6 +14,14 @@ from .send_whatsapp_executor import SendWhatsAppExecutor
 from .send_email_executor import SendEmailExecutor
 from .notification_executor import NotificationExecutor
 from .end_executor import EndExecutor
+from .update_lead_executor import UpdateLeadExecutor
+from .update_company_executor import UpdateCompanyExecutor
+from .assign_owner_executor import AssignOwnerExecutor
+from .change_lead_stage_executor import ChangeLeadStageExecutor
+from .create_crm_task_executor import CreateCRMTaskExecutor
+from .create_note_executor import CreateNoteExecutor
+from .approval_executor import ApprovalExecutor
+from .manual_task_executor import ManualTaskExecutor
 
 __all__ = [
     "BaseNodeExecutor",
@@ -28,4 +36,12 @@ __all__ = [
     "SendEmailExecutor",
     "NotificationExecutor",
     "EndExecutor",
+    "UpdateLeadExecutor",
+    "UpdateCompanyExecutor",
+    "AssignOwnerExecutor",
+    "ChangeLeadStageExecutor",
+    "CreateCRMTaskExecutor",
+    "CreateNoteExecutor",
+    "ApprovalExecutor",
+    "ManualTaskExecutor",
 ]

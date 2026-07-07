@@ -1,256 +1,174 @@
 """Template Engine services."""
 
-from typing import List, Dict, Any, Optional
-import uuid
-from sqlalchemy.orm import Session
+from typing import List, Optional
+from uuid import UUID, uuid4
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.template import Template, TemplateStatus
+from app.repositories.template_repository import TemplateRepository
+from app.repositories.stage_mapping_repository import StageMappingRepository
+from app.repositories.flow_definition_repository import FlowDefinitionRepository
 from .schemas import (
-    TemplateSchema, 
-    TemplateCreateSchema, 
+    TemplateSchema,
+    TemplateCreateSchema,
     TemplateUpdateSchema,
     RenderTemplateRequest,
-    TemplateUsageSchema
+    TemplateUsageSchema,
 )
 from .validators import TemplateValidator
 from .renderer import TemplateRenderer
 from .exceptions import (
     TemplateNotFoundError,
-    TemplateValidationError,
     TemplateInUseError,
-    InvalidTemplateStatusError
 )
-from ..models import CustomTemplate
 
 
 class TemplateService:
-    """Service for managing templates using JAWIS custom_templates table."""
+    """Service for managing communication templates (backed by the `templates` table)."""
 
-    JAWIS_MODULE = 'communications'
-
-    def __init__(self, db_session: Session):
-        """Initialize template service."""
-        self.db = db_session
+    def __init__(self, session: AsyncSession):
+        self.repo = TemplateRepository(session)
+        self.stage_mapping_repo = StageMappingRepository(session)
+        self.flow_definition_repo = FlowDefinitionRepository(session)
         self.validator = TemplateValidator()
         self.renderer = TemplateRenderer()
 
-    def create_template(self, template_data: TemplateCreateSchema) -> TemplateSchema:
-        """
-        Create a new template.
-
-        Args:
-            template_data: Template creation data
-
-        Returns:
-            Created template schema
+    async def create_template(self, data: TemplateCreateSchema) -> TemplateSchema:
+        """Create a new template.
 
         Raises:
-            TemplateValidationError: If validation fails
+            TemplateValidationError: If validation fails.
         """
-        # Validate template name
-        self.validator.validate_template_name(template_data.name)
+        self.validator.validate_template_name(data.name)
+        self.validator.validate_template_content(data.content, data.channel)
+        if data.channel == "email":
+            self.validator.validate_email_template(data.subject or "", data.content)
 
-        # Validate template content
-        variables = self.validator.validate_template_content(
-            template_data.content,
-            template_data.channel
+        template = Template(
+            id=uuid4(),
+            name=data.name,
+            channel=data.channel,
+            subject=data.subject,
+            content=data.content,
+            status=data.status or TemplateStatus.DRAFT.value,
+        )
+        created = await self.repo.create(template)
+        return self._to_schema(created)
+
+    async def get_template(self, template_id: UUID) -> TemplateSchema:
+        """Raises TemplateNotFoundError if the template does not exist."""
+        template = await self.repo.get(template_id)
+        if not template:
+            raise TemplateNotFoundError(f"Template {template_id} not found")
+        return self._to_schema(template)
+
+    async def update_template(self, template_id: UUID, data: TemplateUpdateSchema) -> TemplateSchema:
+        """Raises TemplateNotFoundError / TemplateValidationError."""
+        template = await self.repo.get(template_id)
+        if not template:
+            raise TemplateNotFoundError(f"Template {template_id} not found")
+
+        update_data = data.model_dump(exclude_unset=True)
+        effective_channel = update_data.get("channel", template.channel)
+        effective_content = update_data.get("content", template.content)
+        effective_subject = update_data.get("subject", template.subject)
+
+        if "name" in update_data:
+            self.validator.validate_template_name(update_data["name"])
+        if "content" in update_data or "channel" in update_data:
+            self.validator.validate_template_content(effective_content, effective_channel)
+        if effective_channel == "email" and ("subject" in update_data or "content" in update_data):
+            self.validator.validate_email_template(effective_subject or "", effective_content)
+
+        for field, value in update_data.items():
+            setattr(template, field, value)
+
+        updated = await self.repo.update(template)
+        return self._to_schema(updated)
+
+    async def archive_template(self, template_id: UUID) -> TemplateSchema:
+        """Set status to inactive (used by the frontend's Archive action)."""
+        return await self.update_template(
+            template_id, TemplateUpdateSchema(status=TemplateStatus.INACTIVE.value)
         )
 
-        # Validate email template specific requirements
-        if template_data.channel == "email":
-            self.validator.validate_email_template(
-                template_data.subject or "",
-                template_data.content
-            )
+    async def duplicate_template(self, template_id: UUID) -> TemplateSchema:
+        """Create a draft copy of an existing template."""
+        template = await self.repo.get(template_id)
+        if not template:
+            raise TemplateNotFoundError(f"Template {template_id} not found")
 
-        # Create template in custom_templates table
-        template = CustomTemplate(
-            id=uuid.uuid4(),
-            name=template_data.name,
-            channel=template_data.channel,
-            subject=template_data.subject,
-            body=template_data.content,
-            module=self.JAWIS_MODULE,
+        copy = Template(
+            id=uuid4(),
+            name=f"{template.name} (Copy)",
+            channel=template.channel,
+            subject=template.subject,
+            content=template.content,
+            status=TemplateStatus.DRAFT.value,
         )
+        created = await self.repo.create(copy)
+        return self._to_schema(created)
 
-        self.db.add(template)
-        self.db.commit()
-        self.db.refresh(template)
-
-        return self._model_to_schema(template)
-
-    def get_template(self, template_id: str) -> TemplateSchema:
-        """
-        Get template by ID.
-
-        Args:
-            template_id: Template ID
-
-        Returns:
-            Template schema
-
-        Raises:
-            TemplateNotFoundError: If template not found
-        """
-        template = self.db.query(CustomTemplate).filter(CustomTemplate.id == template_id).first()
+    async def delete_template(self, template_id: UUID) -> bool:
+        """Raises TemplateNotFoundError / TemplateInUseError."""
+        template = await self.repo.get(template_id)
         if not template:
             raise TemplateNotFoundError(f"Template {template_id} not found")
 
-        variables = self.validator.validate_template_content(template.body, template.channel)
-        return self._model_to_schema(template)
-
-    def update_template(self, template_id: str, update_data: TemplateUpdateSchema) -> TemplateSchema:
-        """
-        Update template.
-
-        Args:
-            template_id: Template ID
-            update_data: Update data
-
-        Returns:
-            Updated template schema
-
-        Raises:
-            TemplateNotFoundError: If template not found
-            TemplateValidationError: If validation fails
-        """
-        template = self.db.query(CustomTemplate).filter(CustomTemplate.id == template_id).first()
-        if not template:
-            raise TemplateNotFoundError(f"Template {template_id} not found")
-
-        # Update fields if provided
-        if update_data.name is not None:
-            self.validator.validate_template_name(update_data.name)
-            template.name = update_data.name
-
-        if update_data.content is not None:
-            variables = self.validator.validate_template_content(
-                update_data.content,
-                template.channel
-            )
-            template.body = update_data.content
-
-        if update_data.subject is not None and template.channel == "email":
-            self.validator.validate_email_template(
-                update_data.subject,
-                template.body
-            )
-            template.subject = update_data.subject
-
-        self.db.commit()
-        self.db.refresh(template)
-
-        variables = self.validator.validate_template_content(template.body, template.channel)
-        return self._model_to_schema(template)
-
-    def delete_template(self, template_id: str) -> bool:
-        """
-        Delete template if not in use.
-
-        Args:
-            template_id: Template ID
-
-        Returns:
-            True if deleted
-
-        Raises:
-            TemplateNotFoundError: If template not found
-            TemplateInUseError: If template is currently in use
-        """
-        template = self.db.query(CustomTemplate).filter(CustomTemplate.id == template_id).first()
-        if not template:
-            raise TemplateNotFoundError(f"Template {template_id} not found")
-
-        # Check if template is in use
-        usage = self.get_template_usage(template_id)
-        if usage.journey_ids or usage.flow_ids or usage.campaign_ids:
+        usage = await self.get_template_usage(template_id)
+        if usage.stage_mapping_ids or usage.flow_definition_ids:
             raise TemplateInUseError("Template is currently in use and cannot be deleted")
 
-        self.db.delete(template)
-        self.db.commit()
-        return True
+        return await self.repo.delete(template_id)
 
-    def render_template(self, request: RenderTemplateRequest) -> str:
-        """
-        Render template with variables.
-
-        Args:
-            request: Render request with template ID and variables
-
-        Returns:
-            Rendered content
-
-        Raises:
-            TemplateNotFoundError: If template not found
-        """
-        template = self.db.query(CustomTemplate).filter(CustomTemplate.id == request.template_id).first()
+    async def render_template(self, request: RenderTemplateRequest) -> str:
+        """Raises TemplateNotFoundError / TemplateValidationError."""
+        template = await self.repo.get(UUID(request.template_id))
         if not template:
             raise TemplateNotFoundError(f"Template {request.template_id} not found")
 
         if template.channel == "email":
-            result = self.renderer.render_email(
-                template.subject or "",
-                template.body,
-                request.variables
-            )
-            return result["content"]  # For simplicity, returning content only
-        else:
-            return self.renderer.render_whatsapp(template.body, request.variables)
+            result = self.renderer.render_email(template.subject or "", template.content, request.variables)
+            return result["content"]
+        return self.renderer.render_whatsapp(template.content, request.variables)
 
-    def get_template_usage(self, template_id: str) -> TemplateUsageSchema:
-        """
-        Get template usage information.
+    async def get_template_usage(self, template_id: UUID) -> TemplateUsageSchema:
+        """Find every stage mapping and flow node referencing this template."""
+        template_id_str = str(template_id)
 
-        Args:
-            template_id: Template ID
+        stage_mappings = await self.stage_mapping_repo.get_by_template_id(template_id)
+        stage_mapping_ids = [str(sm.id) for sm in stage_mappings]
 
-        Returns:
-            Template usage schema
-        """
-        # In a real implementation, this would query related models
-        # For now, returning empty lists
+        flow_definitions = await self.flow_definition_repo.get_all(skip=0, limit=1000)
+        flow_definition_ids = []
+        for flow_def in flow_definitions:
+            nodes = (flow_def.definition or {}).get("nodes", [])
+            for node in nodes:
+                config = node.get("config") or {}
+                if config.get("template_id") == template_id_str:
+                    flow_definition_ids.append(str(flow_def.id))
+                    break
+
         return TemplateUsageSchema(
-            journey_ids=[],
-            flow_ids=[],
-            campaign_ids=[]
+            stage_mapping_ids=stage_mapping_ids,
+            flow_definition_ids=flow_definition_ids,
         )
 
-    def list_templates(self, channel: Optional[str] = None) -> List[TemplateSchema]:
-        """
-        List templates for JawCom's module.
+    async def list_templates(
+        self, channel: Optional[str] = None, status: Optional[str] = None
+    ) -> List[TemplateSchema]:
+        templates = await self.repo.get_all(channel=channel, status=status)
+        return [self._to_schema(t) for t in templates]
 
-        Args:
-            channel: Optional channel filter
-
-        Returns:
-            List of template schemas
-        """
-        query = self.db.query(CustomTemplate).filter(
-            CustomTemplate.module == self.JAWIS_MODULE
-        )
-
-        if channel:
-            query = query.filter(CustomTemplate.channel == channel)
-
-        templates = query.all()
-        result = []
-
-        for template in templates:
-            try:
-                variables = self.validator.validate_template_content(template.body, template.channel)
-                result.append(self._model_to_schema(template))
-            except TemplateValidationError:
-                # Skip invalid templates
-                continue
-
-        return result
-
-    def _model_to_schema(self, template: CustomTemplate) -> TemplateSchema:
-        """Convert template model to schema."""
+    def _to_schema(self, template: Template) -> TemplateSchema:
         return TemplateSchema(
             id=str(template.id),
-            channel=template.channel,
             name=template.name,
+            channel=template.channel,
+            status=template.status,
             subject=template.subject,
-            body=template.body,
-            module=template.module,
+            content=template.content,
             created_at=template.created_at,
+            updated_at=template.updated_at,
         )

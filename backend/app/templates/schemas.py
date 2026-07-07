@@ -5,12 +5,13 @@ from pydantic import BaseModel, Field
 
 class TemplateSchema(BaseModel):
     id: str = Field(..., description="Template ID")
-    channel: str = Field(..., description="Template channel")
     name: str = Field(..., description="Template name")
+    channel: str = Field(..., description="Template channel (email|sms|whatsapp|push)")
+    status: str = Field(..., description="Template status (draft|active|inactive)")
     subject: Optional[str] = Field(None, description="Template subject (for email)")
-    body: str = Field(..., description="Template body")
-    module: str = Field(..., description="Template module")
+    content: str = Field(..., description="Template body with {{variable}} placeholders")
     created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
 
     class Config:
         from_attributes = True
@@ -18,22 +19,18 @@ class TemplateSchema(BaseModel):
 
 class TemplateCreateSchema(BaseModel):
     name: str = Field(..., description="Template name")
-    channel: str = Field(..., description="Template channel")
+    channel: str = Field(..., description="Template channel (email|sms|whatsapp|push)")
     subject: Optional[str] = Field(None, description="Template subject (for email)")
     content: str = Field(..., description="Template content with variables")
+    status: Optional[str] = Field(None, description="Template status (defaults to draft)")
 
 
 class TemplateUpdateSchema(BaseModel):
     name: Optional[str] = Field(None, description="Template name")
     subject: Optional[str] = Field(None, description="Template subject (for email)")
     content: Optional[str] = Field(None, description="Template content with variables")
-
-
-class TemplateVersionSchema(BaseModel):
-    id: str = Field(..., description="Version ID")
-    template_id: str = Field(..., description="Template ID")
-    body: str = Field(..., description="Template body")
-    created_at: datetime = Field(..., description="Version creation timestamp")
+    channel: Optional[str] = Field(None, description="Template channel (email|sms|whatsapp|push)")
+    status: Optional[str] = Field(None, description="Template status (draft|active|inactive)")
 
 
 class RenderTemplateRequest(BaseModel):
@@ -42,6 +39,5 @@ class RenderTemplateRequest(BaseModel):
 
 
 class TemplateUsageSchema(BaseModel):
-    journey_ids: List[str] = Field(default_factory=list, description="Journey IDs using this template")
-    flow_ids: List[str] = Field(default_factory=list, description="Flow IDs using this template")
-    campaign_ids: List[str] = Field(default_factory=list, description="Campaign IDs using this template")
+    stage_mapping_ids: List[str] = Field(default_factory=list, description="Stage mappings referencing this template")
+    flow_definition_ids: List[str] = Field(default_factory=list, description="Flow definitions with a node referencing this template")

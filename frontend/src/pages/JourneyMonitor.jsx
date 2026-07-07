@@ -1,5 +1,5 @@
-import { useMemo, useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useMemo, useState, useEffect, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
@@ -7,19 +7,6 @@ import DataTable from "@/components/DataTable";
 import StatusBadge from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Separator } from "@/components/ui/separator";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
-} from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -37,35 +24,24 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { JourneyList, useJourneys } from "@/modules/journeys";
+import { JourneyList, useJourneys, ExecutionDrawer, INSTANCE_STATUS_TONE } from "@/modules/journeys";
 import { runningInstanceService } from "@/services/runningInstances";
 import { journeyService } from "@/services/journeys";
 import { stageMappingService } from "@/services/stageMappings";
-import { flowExecutionLogService } from "@/services/flowExecutionLogs";
 import { toast } from "sonner";
 import {
   Workflow,
   Settings,
   Clock,
-  Pause,
-  Play,
+  RefreshCw,
 } from "lucide-react";
-
-const INSTANCE_STATUS_TONE = {
-  pending: "neutral",
-  running: "info",
-  waiting: "warning",
-  paused: "warning",
-  failed: "danger",
-  completed: "success",
-  cancelled: "neutral",
-};
 
 const PRIORITIES = ["High", "Medium", "Low"];
 
 function toRow(instance, journeyMap) {
   const leadId = instance.lead_id || "";
   const j = journeyMap[instance.journey_id];
+  const data = instance.data || {};
   return {
     id: instance.id,
     journey_id: instance.journey_id,
@@ -85,10 +61,16 @@ function toRow(instance, journeyMap) {
     pendingActions: 0,
     owner: "—",
     priority: PRIORITIES[Math.floor(Math.random() * PRIORITIES.length)],
-    nextAutomation: instance.status === "running" ? "Active" : instance.status === "completed" ? "Completed" : instance.status,
+    current_node_id: data.current_node_id || null,
+    last_executed_at: data.last_executed_at || null,
+    resume_at: data.resume_at || null,
+    retry_count: data.retry_count || 0,
+    started_at: instance.started_at || null,
+    completed_at: instance.completed_at || null,
     lastActivity: instance.updated_at || instance.created_at || "—",
     aiSummary: "",
     healthTone: instance.status === "completed" ? "success" : instance.status === "failed" ? "danger" : "warning",
+    data: data,
     timeline: [],
   };
 }
@@ -97,11 +79,13 @@ const FILTER_TABS = [
   { label: "All", value: "all" },
   { label: "Running", value: "running" },
   { label: "Paused", value: "paused" },
+  { label: "Waiting Approval", value: "waiting_approval" },
+  { label: "Waiting Task", value: "waiting_task" },
   { label: "Failed", value: "failed" },
 ];
 
 export default function JourneyMonitor() {
-  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [viewMode, setViewMode] = useState("monitor");
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("all");
@@ -110,8 +94,7 @@ export default function JourneyMonitor() {
   const [instances, setInstances] = useState([]);
   const [journeyMap, setJourneyMap] = useState({});
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState(null);
-  const [logs, setLogs] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
 
   const { journeys, loading: journeysLoading, refetch: refetchJourneys } = useJourneys();
   const [mappings, setMappings] = useState([]);
@@ -122,17 +105,34 @@ export default function JourneyMonitor() {
   const [createName, setCreateName] = useState("");
   const [createDesc, setCreateDesc] = useState("");
 
-  useEffect(() => {
-    Promise.all([
-      runningInstanceService.list(),
-      journeyService.list(),
-    ]).then(([instancesData, journeysData]) => {
+  const fetchData = useCallback(async () => {
+    try {
+      const [instancesData, journeysData] = await Promise.all([
+        runningInstanceService.list(),
+        journeyService.list(),
+      ]);
       setInstances(instancesData);
       const map = {};
       journeysData.forEach((j) => { map[j.id] = j; });
       setJourneyMap(map);
-    }).catch(() => {}).finally(() => setLoading(false));
+    } catch {
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      runningInstanceService.list().then(setInstances).catch(() => {});
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleRefresh = useCallback(async () => {
+    await fetchData();
+  }, [fetchData]);
 
   useEffect(() => {
     if (viewMode !== "manage") return;
@@ -163,13 +163,15 @@ export default function JourneyMonitor() {
     return enriched.filter((r) => {
       if (tab === "all") {}
       else if (tab === "running" && r.autoStatus !== "running") return false;
-      else if (tab === "paused" && r.autoStatus !== "paused") return false;
+      else if (tab === "paused" && r.autoStatus !== "paused" && r.autoStatus !== "waiting") return false;
+      else if (tab === "waiting_approval" && r.autoStatus !== "waiting_approval") return false;
+      else if (tab === "waiting_task" && r.autoStatus !== "waiting_task") return false;
       else if (tab === "failed" && r.autoStatus !== "failed") return false;
       if (journeyFilter !== "all" && r.journey !== journeyFilter) return false;
       if (statusFilter !== "all" && r.autoStatus !== statusFilter) return false;
       if (search) {
         const q = search.toLowerCase();
-        const hay = `${r.name} ${r.journey} ${r.autoStatus}`.toLowerCase();
+        const hay = `${r.name} ${r.journey} ${r.autoStatus} ${String(r.lead_id)} ${r.current_node_id || ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -191,15 +193,16 @@ export default function JourneyMonitor() {
     }));
   }, [journeys, mappings, instanceCounts]);
 
-  const handleSelect = async (row) => {
-    setSelected(row);
-    try {
-      const logData = await flowExecutionLogService.list({ runningInstanceId: row.id });
-      setLogs(logData);
-    } catch {
-      setLogs([]);
-    }
-  };
+  // Deep-link support: /journeys?instance=<id> (used by the Journey
+  // Dashboard's Quick Actions / Running tab) auto-opens that instance's
+  // detail drawer, then clears the param.
+  useEffect(() => {
+    const instanceId = searchParams.get("instance");
+    if (!instanceId) return;
+    setSelectedId(instanceId);
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const handleCreate = async () => {
     if (!createName.trim()) return;
@@ -250,22 +253,17 @@ export default function JourneyMonitor() {
       render: (r) => <StatusBadge status={r.health === "Healthy" ? "Active" : r.health === "At Risk" ? "Open" : "Lost"} tone={r.healthTone} />,
     },
     {
-      key: "nextAutomation",
+      key: "current_node_id",
       label: "Current Node",
       render: (r) => (
         <span className="flex items-center gap-1 whitespace-nowrap text-xs">
           <Clock className="h-3 w-3 text-muted-foreground" />
-          {r.nextAutomation}
+          {r.current_node_id || (r.autoStatus === "completed" ? "Completed" : r.autoStatus === "failed" ? "Failed" : "—")}
         </span>
       ),
     },
     { key: "lastActivity", label: "Last Activity", render: (r) => <span className="whitespace-nowrap text-xs text-muted-foreground">{r.lastActivity}</span> },
   ];
-
-  const steps = selected ? logs.map((log, i) => ({
-    name: `${log.action || log.node_action || "Step"} ${i + 1}`,
-    state: log.status === "completed" ? "done" : log.status === "failed" ? "done" : "current",
-  })) : [];
 
   if (loading) {
     return (
@@ -287,9 +285,14 @@ export default function JourneyMonitor() {
         }
         actions={
           viewMode === "monitor" ? (
-            <Button size="sm" variant="outline" onClick={() => setViewMode("manage")}>
-              <Settings className="mr-2 h-3.5 w-3.5" /> Manage Journeys
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={handleRefresh}>
+                <RefreshCw className="mr-2 h-3.5 w-3.5" /> Refresh
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setViewMode("manage")}>
+                <Settings className="mr-2 h-3.5 w-3.5" /> Manage Journeys
+              </Button>
+            </div>
           ) : (
             <Button size="sm" variant="outline" onClick={() => setViewMode("monitor")}>
               <Workflow className="mr-2 h-3.5 w-3.5" /> Running Monitor
@@ -318,97 +321,14 @@ export default function JourneyMonitor() {
               <FilterSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={["all", "running", "paused", "completed", "failed", "waiting"]} />
             </div>
 
-            <DataTable columns={columns} rows={rows} onRowClick={handleSelect} testId="journey-monitor-table" />
+            <DataTable columns={columns} rows={rows} onRowClick={(row) => setSelectedId(row.id)} testId="journey-monitor-table" />
           </div>
 
-          <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-            <SheetContent side="right" className="w-full overflow-y-auto p-0 sm:max-w-md">
-              {selected && (
-                <>
-                  <SheetHeader className="border-b border-border p-6">
-                    <div className="flex items-start gap-4">
-                      <Avatar className="h-14 w-14">
-                        <AvatarFallback className="bg-primary/10 text-base font-semibold text-primary">{selected.initials}</AvatarFallback>
-                      </Avatar>
-                      <div className="min-w-0 flex-1 text-left">
-                        <SheetTitle className="truncate text-lg">{selected.name}</SheetTitle>
-                        <p className="mt-2 flex flex-wrap gap-1.5">
-                          <StatusBadge status={selected.autoStatus} tone={INSTANCE_STATUS_TONE[selected.autoStatus]} />
-                          <StatusBadge status={selected.health === "Healthy" ? "Active" : selected.health === "At Risk" ? "Open" : "Lost"} tone={selected.healthTone} />
-                        </p>
-                      </div>
-                    </div>
-                  </SheetHeader>
-
-                  <Tabs defaultValue="journey" className="p-6">
-                    <TabsList className="grid w-full grid-cols-3">
-                      <TabsTrigger value="journey" className="text-xs">Journey</TabsTrigger>
-                      <TabsTrigger value="steps" className="text-xs">Steps</TabsTrigger>
-                      <TabsTrigger value="timeline" className="text-xs">Timeline</TabsTrigger>
-                    </TabsList>
-
-                    <TabsContent value="journey" className="mt-5 space-y-3 text-sm">
-                      <div className="rounded-lg border border-border bg-card p-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Workflow className="h-3.5 w-3.5 text-primary" />
-                            <span className="text-sm font-semibold">{selected.journey}</span>
-                          </div>
-                          <StatusBadge status={selected.autoStatus} tone={INSTANCE_STATUS_TONE[selected.autoStatus]} />
-                        </div>
-                      </div>
-                      <MetaRow label="Status" value={selected.autoStatus} />
-                      <MetaRow label="Current Node" value={selected.nextAutomation} />
-                      <MetaRow label="Lead ID" value={selected.lead_id} />
-                      <MetaRow label="Health" value={selected.health} />
-                      <Separator />
-                      <div className="flex flex-col gap-1.5">
-                        <Button variant="outline" size="sm" className="h-8 justify-start text-xs">
-                          <Pause className="mr-2 h-3 w-3" /> Pause instance
-                        </Button>
-                        <Button variant="outline" size="sm" className="h-8 justify-start text-xs">
-                          <Play className="mr-2 h-3 w-3" /> Resume instance
-                        </Button>
-                      </div>
-                    </TabsContent>
-
-                    <TabsContent value="steps" className="mt-5 space-y-2">
-                      {steps.length === 0 ? (
-                        <div className="text-sm text-muted-foreground">No execution logs available.</div>
-                      ) : (
-                        steps.map((s, i) => (
-                          <div key={i} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-                            <span
-                              className={`inline-block h-2.5 w-2.5 rounded-full ${
-                                s.state === "done" ? "bg-emerald-500" : s.state === "current" ? "bg-primary" : "bg-secondary"
-                              }`}
-                            />
-                            <span className={`text-sm ${s.state === "upcoming" ? "text-muted-foreground" : "font-medium"}`}>{s.name}</span>
-                          </div>
-                        ))
-                      )}
-                    </TabsContent>
-
-                    <TabsContent value="timeline" className="mt-5">
-                      {logs.length === 0 ? (
-                        <div className="text-sm text-muted-foreground">No timeline events.</div>
-                      ) : (
-                        <ol className="relative space-y-4 border-l border-border pl-5">
-                          {logs.map((log, i) => (
-                            <li key={log.id || i} className="relative">
-                              <span className="absolute -left-[26px] top-1 flex h-3 w-3 items-center justify-center rounded-full border-2 border-background bg-primary" />
-                              <div className="text-xs text-muted-foreground">{log.created_at || log.timestamp || "—"}</div>
-                              <p className="text-sm">{log.action || log.node_action || "Execution event"}</p>
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                    </TabsContent>
-                  </Tabs>
-                </>
-              )}
-            </SheetContent>
-          </Sheet>
+          <ExecutionDrawer
+            instanceId={selectedId}
+            onClose={() => setSelectedId(null)}
+            onActionComplete={fetchData}
+          />
         </>
       ) : (
         <div className="space-y-4 px-4 py-6 md:px-8">
@@ -467,15 +387,6 @@ function FilterSelect({ label, value, onChange, options }) {
           ))}
         </SelectContent>
       </Select>
-    </div>
-  );
-}
-
-function MetaRow({ label, value }) {
-  return (
-    <div className="flex items-center justify-between border-b border-border/60 pb-2 text-sm">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
     </div>
   );
 }

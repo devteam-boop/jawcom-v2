@@ -19,6 +19,14 @@ from .send_whatsapp_executor import SendWhatsAppExecutor
 from .send_email_executor import SendEmailExecutor
 from .notification_executor import NotificationExecutor
 from .end_executor import EndExecutor
+from .update_lead_executor import UpdateLeadExecutor
+from .update_company_executor import UpdateCompanyExecutor
+from .assign_owner_executor import AssignOwnerExecutor
+from .change_lead_stage_executor import ChangeLeadStageExecutor
+from .create_crm_task_executor import CreateCRMTaskExecutor
+from .create_note_executor import CreateNoteExecutor
+from .approval_executor import ApprovalExecutor
+from .manual_task_executor import ManualTaskExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +43,14 @@ class ExecutorFactory:
         "send_email": SendEmailExecutor,
         "notification": NotificationExecutor,
         "end": EndExecutor,
+        "update_lead": UpdateLeadExecutor,
+        "update_company": UpdateCompanyExecutor,
+        "assign_owner": AssignOwnerExecutor,
+        "change_lead_stage": ChangeLeadStageExecutor,
+        "create_crm_task": CreateCRMTaskExecutor,
+        "create_note": CreateNoteExecutor,
+        "approval": ApprovalExecutor,
+        "manual_task": ManualTaskExecutor,
     }
 
     @classmethod

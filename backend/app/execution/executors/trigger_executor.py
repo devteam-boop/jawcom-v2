@@ -28,6 +28,7 @@ class TriggerExecutor(BaseNodeExecutor):
         running_instance: Any,
         lead_id: int,
         context: Dict[str, Any],
+        exec_ctx: Any = None,
     ) -> ExecutionResult:
         started_at = datetime.utcnow()
         stage_key = context.get("trigger_stage_key", "unknown")

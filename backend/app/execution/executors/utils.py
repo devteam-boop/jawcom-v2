@@ -79,9 +79,9 @@ def build_log_payload(
 def get_next_node_id(node: Dict[str, Any], context: Dict[str, Any]) -> Optional[str]:
     """Resolve the default next node from a flow node definition.
 
-    Prefer an explicit ``next_node_id`` stored in node data (used by
+    Prefer an explicit ``next_node_id`` stored in node config (used by
     condition branches) otherwise return None and let the engine use graph
     adjacency.
     """
-    node_data = node.get("data") or {}
-    return node_data.get("next_node_id") or None
+    node_config = node.get("config") or {}
+    return node_config.get("next_node_id") or None

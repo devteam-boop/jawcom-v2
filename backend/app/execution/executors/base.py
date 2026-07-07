@@ -6,7 +6,7 @@ it never contains business logic for individual node types.
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -38,20 +38,43 @@ class ExecutionResult:
 
 @dataclass
 class ExecutionContext:
-    """Execution context passed to each executor.
+    """Rich execution context passed to every node executor.
 
-    This object is intentionally plain and JSON-serializable-friendly so
-    that context snapshots can be stored in running instance data.
+    Contains resolved lead/company data, journey metadata, execution
+    timestamps, a ``VariableResolverService`` for resolving
+    ``{{variable}}`` placeholders inside node configuration, and a
+    ``TemplateService`` for resolving ``node.config.template_id`` into
+    actual template content (executors never query the database directly).
     """
 
     lead_id: int
-    instance_id: str
-    flow_definition_id: str
-    node_id: str
-    node_type: str
-    node_data: Dict[str, Any]
-    context: Dict[str, Any]
-    started_at: Optional[datetime] = None
+    lead: Dict[str, Any]
+    company: Optional[Dict[str, Any]] = None
+    journey_name: str = ""
+    instance_id: str = ""
+    flow_definition_id: str = ""
+    execution_time: Optional[datetime] = None
+    node_outputs: Optional[Dict[str, Any]] = field(default_factory=dict)
+    resolver: Any = None
+    renderer: Any = None
+    template_service: Any = None
+    context: Optional[Dict[str, Any]] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Flatten context into a variable-resolution dict."""
+        now = self.execution_time or datetime.utcnow()
+        return {
+            "lead": self.lead or {},
+            "company": self.company or {},
+            "journey": {"name": self.journey_name},
+            "execution": {
+                "id": self.instance_id,
+                "flow_definition_id": self.flow_definition_id,
+            },
+            "today": now.strftime("%Y-%m-%d"),
+            "now": now.isoformat(),
+            "node_outputs": self.node_outputs or {},
+        }
 
 
 class BaseNodeExecutor(ABC):
@@ -75,6 +98,7 @@ class BaseNodeExecutor(ABC):
         running_instance: Any,
         lead_id: int,
         context: Dict[str, Any],
+        exec_ctx: Optional[ExecutionContext] = None,
     ) -> ExecutionResult:
         """Execute the node.
 
@@ -83,6 +107,8 @@ class BaseNodeExecutor(ABC):
             running_instance: The RunningJourneyInstance model/row the engine is updating.
             lead_id: The lead identifier.
             context: Mutable execution context shared across nodes.
+            exec_ctx: Rich ExecutionContext with resolved lead/company data,
+                      variable resolver, and execution metadata.
 
         Returns:
             ExecutionResult with success, next node, context updates and optional error.

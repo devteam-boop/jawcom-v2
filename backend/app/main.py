@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config.settings import get_settings
 from app.config.logging import configure_logging, get_logger
 from app.core.dependencies import get_db_session
-from app.database.session import init_db, close_db
+from app.database.session import init_db, close_db, async_session_maker
 from app.api import (
     journey_router,
     stage_mapping_router,
@@ -15,6 +15,10 @@ from app.api import (
     flow_version_router,
     flow_execution_log_router,
     execution_router,
+    approval_router,
+    task_router,
+    template_router,
+    integration_router,
 )
 from app.events.dispatcher import get_dispatcher
 from app.jawis.webhook import get_webhook_handler
@@ -54,6 +58,13 @@ app.include_router(flow_definition_router)
 app.include_router(flow_version_router)
 app.include_router(flow_execution_log_router)
 app.include_router(execution_router)
+app.include_router(approval_router)
+app.include_router(task_router)
+app.include_router(template_router)
+app.include_router(integration_router)
+
+
+_scheduler = None
 
 
 @app.on_event("startup")
@@ -76,12 +87,26 @@ async def startup_event():
         "Registered CommunicationEventHandler for %d event types",
         len(("lead.created", "lead.stage_changed", "lead.assigned", "lead.requirement_met")),
     )
+
+    # Start background scheduler for waiting instances
+    if settings.SCHEDULER_ENABLED:
+        from app.services.wait_scheduler_service import SchedulerService
+
+        global _scheduler
+        _scheduler = SchedulerService(async_session_maker)
+        await _scheduler.start()
+
     logger.info("Application startup complete")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Close database connection on shutdown."""
+    """Close database connection and stop background tasks on shutdown."""
+    global _scheduler
+    if _scheduler is not None:
+        await _scheduler.stop()
+        _scheduler = None
+
     await close_db()
     logger.info("Application shutdown complete")
 
