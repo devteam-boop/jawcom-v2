@@ -21,6 +21,8 @@ import { journeyService } from "@/services/journeys";
 import { flowExecutionLogService } from "@/services/flowExecutionLogs";
 import { approvalService } from "@/services/approvals";
 import { taskService } from "@/services/tasks";
+import { communicationEventService } from "@/services/communicationEvents";
+import CommunicationTimeline from "./CommunicationTimeline";
 import { toast } from "sonner";
 import {
   Workflow,
@@ -80,6 +82,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
   const [logs, setLogs] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [communicationEvents, setCommunicationEvents] = useState([]);
 
   useEffect(() => {
     if (!instanceId) {
@@ -88,6 +91,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
       setLogs([]);
       setApprovals([]);
       setTasks([]);
+      setCommunicationEvents([]);
       return undefined;
     }
 
@@ -111,6 +115,11 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
       .list({ runningInstanceId: instanceId })
       .then((data) => { if (active) setLogs(data); })
       .catch(() => { if (active) setLogs([]); });
+
+    communicationEventService
+      .list({ runningInstanceId: instanceId })
+      .then((data) => { if (active) setCommunicationEvents(data); })
+      .catch(() => { if (active) setCommunicationEvents([]); });
 
     Promise.all([
       approvalService.list(instanceId).catch(() => []),
@@ -293,7 +302,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
             )}
 
             <Tabs defaultValue="overview" className="p-6">
-              <TabsList className={`grid w-full grid-cols-${row.autoStatus === 'waiting_approval' || row.autoStatus === 'waiting_task' || approvals.length > 0 || tasks.length > 0 ? '6' : '4'}`}>
+              <TabsList className={`grid w-full grid-cols-${row.autoStatus === 'waiting_approval' || row.autoStatus === 'waiting_task' || approvals.length > 0 || tasks.length > 0 ? '7' : '5'}`}>
                 <TabsTrigger value="overview" className="text-xs">Overview</TabsTrigger>
                 {(row.autoStatus === 'waiting_approval' || approvals.length > 0) && (
                   <TabsTrigger value="approvals" className="text-xs">Approvals</TabsTrigger>
@@ -303,6 +312,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                 )}
                 <TabsTrigger value="steps" className="text-xs">Steps</TabsTrigger>
                 <TabsTrigger value="timeline" className="text-xs">Timeline</TabsTrigger>
+                <TabsTrigger value="communication" className="text-xs">Communication</TabsTrigger>
                 <TabsTrigger value="raw" className="text-xs">Raw</TabsTrigger>
               </TabsList>
 
@@ -491,9 +501,13 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                 )}
               </TabsContent>
 
+              <TabsContent value="communication" className="mt-5">
+                <CommunicationTimeline events={communicationEvents} />
+              </TabsContent>
+
               <TabsContent value="raw" className="mt-5">
                 <pre className="max-h-[400px] overflow-auto rounded-lg border border-border bg-card p-3 text-xs">
-                  {JSON.stringify({ instance, logs }, null, 2)}
+                  {JSON.stringify({ instance, logs, communicationEvents }, null, 2)}
                 </pre>
               </TabsContent>
             </Tabs>

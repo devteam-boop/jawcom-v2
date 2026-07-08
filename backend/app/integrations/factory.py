@@ -23,11 +23,12 @@ class IntegrationFactory:
     Follows the same registry pattern as ``LeadProviderFactory`` and
     ``ExecutorFactory``.
 
-    The special key ``"crm"`` is resolved based on the
-    ``JAWIS_CRM_PROVIDER`` environment variable: when set to ``"jawis"``
-    the factory returns ``JawisCRMIntegration``, otherwise the
-    ``DummyCRMIntegration``.  This allows switching CRM backends by
-    configuration without touching any executor code.
+    The special keys ``"crm"``, ``"whatsapp"``, and ``"email"`` are pure
+    aliases resolved from env vars (``JAWIS_CRM_PROVIDER``,
+    ``JAWIS_WHATSAPP_PROVIDER``, ``JAWIS_EMAIL_PROVIDER`` respectively;
+    all default to their JAWIS-backed integration). This allows switching
+    backends by configuration without touching any executor code — see
+    the alias setup at the bottom of this module.
     """
 
     _registry: Dict[str, Type[BaseIntegration]] = {}
@@ -80,3 +81,22 @@ if _crm_backend == "jawis":
     IntegrationFactory.register_alias("crm", "crm_jawis")
 else:
     IntegrationFactory.register_alias("crm", "crm_dummy")
+
+# ── Set up the "whatsapp"/"email" aliases ─────────────────────────────
+# Same pattern as "crm" above. Default is "jawis" in both cases, so
+# existing behavior is unchanged unless the env var is explicitly set.
+_whatsapp_backend = os.environ.get("JAWIS_WHATSAPP_PROVIDER", "jawis")
+if _whatsapp_backend == "meta":
+    IntegrationFactory.register_alias("whatsapp", "whatsapp_meta")
+elif _whatsapp_backend == "dummy":
+    IntegrationFactory.register_alias("whatsapp", "whatsapp_dummy")
+else:
+    IntegrationFactory.register_alias("whatsapp", "whatsapp_jawis")
+
+_email_backend = os.environ.get("JAWIS_EMAIL_PROVIDER", "jawis")
+if _email_backend == "resend":
+    IntegrationFactory.register_alias("email", "email_resend")
+elif _email_backend == "dummy":
+    IntegrationFactory.register_alias("email", "email_dummy")
+else:
+    IntegrationFactory.register_alias("email", "email_jawis")

@@ -1,95 +1,108 @@
 import { useMemo } from "react";
 import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
-import StatusBadge from "@/components/StatusBadge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
-import { MessageCircle, Mail, Instagram, Facebook, MessageSquare } from "lucide-react";
-
-const channelIcon = {
-  WhatsApp: MessageCircle,
-  Email: Mail,
-  Instagram: Instagram,
-  Facebook: Facebook,
-  SMS: MessageSquare,
-};
+import ChannelBadge from "./ChannelBadge";
+import { previewFor } from "./conversationPreview";
+import { isConversationUnread } from "./unreadTracker";
 
 const FILTERS = [
-  { label: "Unread", value: "Unread" },
-  { label: "Open", value: "Open" },
-  { label: "Closed", value: "Closed" },
-  { label: "Assigned", value: "Assigned" },
   { label: "All", value: "all" },
+  { label: "Unread", value: "unread" },
 ];
 
-export default function ConversationList({ conversations, selectedId, onSelect, search, onSearchChange, filter, onFilterChange }) {
+/**
+ * One row per lead ("one conversation per lead"). Grouping WhatsApp/Email/
+ * Notes/future channels together means each row shows every channel that
+ * has activity for that lead as small badges, rather than splitting the
+ * list by channel.
+ */
+export default function ConversationList({ conversations, selectedLeadId, onSelect, search, onSearchChange, filter, onFilterChange }) {
   const filtered = useMemo(() => {
     return conversations.filter((c) => {
-      if (filter !== "all" && c.status !== filter) return false;
-      if (search && !`${c.customer} ${c.company} ${c.preview}`.toLowerCase().includes(search.toLowerCase())) return false;
+      if (filter === "unread" && !isConversationUnread(c.leadId, c.lastActivityAt)) return false;
+      if (search && !String(c.leadId).includes(search.trim())) return false;
       return true;
     });
   }, [conversations, filter, search]);
 
+  const unreadCount = useMemo(
+    () => conversations.filter((c) => isConversationUnread(c.leadId, c.lastActivityAt)).length,
+    [conversations]
+  );
+
   const filterOptions = FILTERS.map((f) => ({
     ...f,
-    count: f.value === "all" ? conversations.length : conversations.filter((c) => c.status === f.value).length,
+    count: f.value === "all" ? conversations.length : unreadCount,
   }));
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-b border-border lg:w-[340px] lg:border-b-0 lg:border-r">
+    <aside
+      className="flex w-full shrink-0 flex-col border-b border-border lg:w-[360px] lg:border-b-0 lg:border-r"
+      data-testid="conversation-list"
+    >
       <div className="flex flex-col gap-3 border-b border-border p-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold">Inbox</h2>
         </div>
-        <SearchBar value={search} onChange={onSearchChange} placeholder="Search conversations…" testId="conversations-search" />
+        <SearchBar value={search} onChange={onSearchChange} placeholder="Search by lead ID…" testId="conversations-search" />
         <FilterBar options={filterOptions} value={filter} onChange={onFilterChange} testId="conversations-filter" />
       </div>
+
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        {filtered.map((c) => {
-          const Icon = channelIcon[c.channel] || MessageCircle;
-          const active = c.id === selectedId;
-          return (
-            <button
-              key={c.id}
-              onClick={() => onSelect(c.id)}
-              className={cn(
-                "flex w-full gap-3 border-b border-border/60 p-4 text-left transition-colors hover:bg-secondary/50",
-                active && "bg-accent"
-              )}
-              data-testid={`conv-item-${c.id}`}
-            >
-              <div className="relative shrink-0">
-                <Avatar className="h-10 w-10">
-                  <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-                    {c.initials}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full border-2 border-card bg-card">
-                  <Icon className="h-2.5 w-2.5 text-muted-foreground" />
-                </span>
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm font-semibold">{c.customer}</span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">{c.time}</span>
-                </div>
-                <p className="mt-0.5 truncate text-xs text-muted-foreground">{c.company}</p>
-                <p className={cn("mt-1 line-clamp-1 text-xs", c.unread > 0 ? "font-medium text-foreground" : "text-muted-foreground")}>
-                  {c.preview}
-                </p>
-                <div className="mt-2 flex items-center gap-1.5">
-                  <StatusBadge status={c.status} />
-                  {c.unread > 0 && (
-                    <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                      {c.unread}
-                    </span>
+        {filtered.length === 0 ? (
+          <div className="p-6 text-center text-sm text-muted-foreground">No conversations found.</div>
+        ) : (
+          filtered.map((c) => {
+            const active = c.leadId === selectedLeadId;
+            const unread = isConversationUnread(c.leadId, c.lastActivityAt);
+            return (
+              <button
+                key={c.leadId}
+                onClick={() => onSelect(c.leadId)}
+                className={cn(
+                  "flex w-full gap-3 border-b border-border/60 p-4 text-left transition-colors hover:bg-secondary/50",
+                  active && "bg-accent"
+                )}
+                data-testid={`conv-item-${c.leadId}`}
+              >
+                <div className="relative shrink-0">
+                  <Avatar className="h-10 w-10">
+                    <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
+                      {String(c.leadId).slice(0, 2)}
+                    </AvatarFallback>
+                  </Avatar>
+                  {unread && (
+                    <span
+                      className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-card bg-primary"
+                      data-testid={`unread-dot-${c.leadId}`}
+                      title="Unread (local placeholder — not backend-tracked)"
+                    />
                   )}
                 </div>
-              </div>
-            </button>
-          );
-        })}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-semibold">Lead #{c.leadId}</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      {c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "—"}
+                    </span>
+                  </div>
+                  <p className={cn("mt-1 line-clamp-1 text-xs", unread ? "font-medium text-foreground" : "text-muted-foreground")}>
+                    {previewFor(c.latestEvent)}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {c.channels.length === 0 ? (
+                      <ChannelBadge channel="system" />
+                    ) : (
+                      c.channels.map((ch) => <ChannelBadge key={ch} channel={ch} />)
+                    )}
+                  </div>
+                </div>
+              </button>
+            );
+          })
+        )}
       </div>
     </aside>
   );

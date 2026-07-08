@@ -9,6 +9,11 @@ from .approval_routes import router as approval_router
 from .task_routes import router as task_router
 from .template_routes import router as template_router
 from .integration_routes import router as integration_router
+from .communication_event_routes import router as communication_event_router
+from .meta_webhook_routes import router as meta_webhook_router
+from .resend_webhook_routes import router as resend_webhook_router
+from .ai_assistant_routes import router as ai_assistant_router
+from .ai_summary_routes import router as ai_summary_router
 
 __all__ = [
     "journey_router",
@@ -22,4 +27,9 @@ __all__ = [
     "task_router",
     "template_router",
     "integration_router",
+    "communication_event_router",
+    "meta_webhook_router",
+    "resend_webhook_router",
+    "ai_assistant_router",
+    "ai_summary_router",
 ]

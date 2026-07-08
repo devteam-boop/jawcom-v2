@@ -48,10 +48,31 @@ from app.services.journey_service import JourneyService
 from app.services.running_instance_service import RunningInstanceService
 from app.services.flow_execution_log_service import FlowExecutionLogService
 from app.services.variable_resolver_service import VariableResolverService
+from app.services.communication_event_service import CommunicationEventService
 from app.runtime.schemas import RunningInstanceCreateSchema, RunningInstanceUpdateSchema
 from app.flow_definitions.schemas import FlowExecutionLogCreateSchema
+from app.communication_events.schemas import CommunicationEventCreateSchema
+from app.models.communication_event import CommunicationEventType, CommunicationEventChannel
 
 logger = logging.getLogger(__name__)
+
+# Node type -> communication event mapping. Only node types with a
+# required Sprint 1 event are listed; anything absent here is silently
+# skipped by _record_communication_event (e.g. delay/end/approval nodes).
+_NODE_TYPE_TO_EVENT_TYPE = {
+    "trigger": CommunicationEventType.TRIGGER_EXECUTED.value,
+    "condition": CommunicationEventType.CONDITION_EVALUATED.value,
+    "wait": CommunicationEventType.WAIT_STARTED.value,
+    "send_whatsapp": CommunicationEventType.WHATSAPP_SENT.value,
+    "send_email": CommunicationEventType.EMAIL_SENT.value,
+    "create_note": CommunicationEventType.NOTE_ADDED.value,
+    "manual_task": CommunicationEventType.TASK_CREATED.value,
+}
+
+_NODE_TYPE_TO_CHANNEL = {
+    "send_whatsapp": CommunicationEventChannel.WHATSAPP.value,
+    "send_email": CommunicationEventChannel.EMAIL.value,
+}
 
 
 class ExecutionEngine:
@@ -127,6 +148,7 @@ class ExecutionEngine:
                 journey_service = JourneyService(session)
                 instance_service = RunningInstanceService(session)
                 log_service = FlowExecutionLogService(session)
+                event_service = CommunicationEventService(session)
                 lead_provider: LeadProvider = LeadProviderFactory.get_provider()
 
                 # 1. Find matching stage mappings
@@ -161,6 +183,16 @@ class ExecutionEngine:
                         data={"trigger_stage_key": stage_key},
                     )
                     instance = await instance_service.create(instance_schema)
+
+                    await self._record_communication_event(
+                        event_service=event_service,
+                        running_instance_id=instance.id,
+                        journey_id=instance.journey_id,
+                        lead_id=int(lead_id),
+                        node_id=None,
+                        event_type=CommunicationEventType.JOURNEY_STARTED.value,
+                        payload={"trigger_stage_key": stage_key, "journey_name": journey.name},
+                    )
 
                     # 4. Load the published FlowDefinition
                     flow_def = await self._load_flow_definition(journey)
@@ -209,6 +241,7 @@ class ExecutionEngine:
                             exec_ctx=exec_ctx,
                             log_service=log_service,
                             instance_service=instance_service,
+                            event_service=event_service,
                         )
 
                         # 7. Traverse remaining nodes only if trigger succeeded
@@ -223,6 +256,7 @@ class ExecutionEngine:
                                 exec_ctx=exec_ctx,
                                 log_service=log_service,
                                 instance_service=instance_service,
+                                event_service=event_service,
                             )
 
                     logger.info(
@@ -250,6 +284,7 @@ class ExecutionEngine:
         context: Dict[str, Any],
         log_service: FlowExecutionLogService,
         instance_service: RunningInstanceService,
+        event_service: CommunicationEventService,
         exec_ctx: Optional[ExecutionContext] = None,
     ) -> bool:
         """Execute a single node through its registered executor.
@@ -310,6 +345,16 @@ class ExecutionEngine:
         if result.success:
             output_data = result.output or {}
             output_data.pop("log_payload", None)
+
+            await self._record_communication_event(
+                event_service=event_service,
+                running_instance_id=instance.id,
+                journey_id=getattr(instance, "journey_id", None),
+                lead_id=lead_id,
+                node_id=node_id,
+                node_type=node_type,
+                payload=output_data,
+            )
 
             # Success log
             await log_service.create(
@@ -447,6 +492,61 @@ class ExecutionEngine:
             )
         )
 
+    async def _record_communication_event(
+        self,
+        event_service: CommunicationEventService,
+        running_instance_id: str,
+        journey_id: Optional[str],
+        lead_id: int,
+        node_id: Optional[str],
+        payload: Optional[Dict[str, Any]] = None,
+        node_type: Optional[str] = None,
+        event_type: Optional[str] = None,
+    ) -> None:
+        """Record one row in the canonical communication-event log.
+
+        Resolves ``event_type`` from ``node_type`` via
+        ``_NODE_TYPE_TO_EVENT_TYPE`` when not given explicitly (the common
+        case, called once per successful node execution from
+        ``_execute_node``); silently no-ops for node types with no mapped
+        event (delay/end/approval/etc — out of Sprint 1 scope). Callers with
+        a fixed event (e.g. Journey Started) pass ``event_type`` directly.
+
+        Best-effort: never raises, so a communication-event write failure
+        can never fail journey execution — this log is observability, not
+        the source of truth for traversal (that remains FlowExecutionLog /
+        RunningJourneyInstance).
+        """
+        resolved_event_type = event_type or _NODE_TYPE_TO_EVENT_TYPE.get(node_type or "")
+        if not resolved_event_type:
+            return
+
+        channel = _NODE_TYPE_TO_CHANNEL.get(node_type or "", CommunicationEventChannel.SYSTEM.value)
+        payload = payload or {}
+        provider_response = payload.get("provider_response") if isinstance(payload, dict) else None
+        provider_message_id = (
+            provider_response.get("message_id") if isinstance(provider_response, dict) else None
+        )
+
+        try:
+            await event_service.create(
+                CommunicationEventCreateSchema(
+                    running_instance_id=running_instance_id,
+                    journey_id=journey_id,
+                    lead_id=lead_id,
+                    node_id=node_id,
+                    event_type=resolved_event_type,
+                    channel=channel,
+                    provider_message_id=provider_message_id,
+                    payload=payload,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record communication event (event_type=%s node_id=%s instance=%s)",
+                resolved_event_type, node_id, running_instance_id,
+            )
+
     # ------------------------------------------------------------------
     # Flow traversal
     # ------------------------------------------------------------------
@@ -461,6 +561,7 @@ class ExecutionEngine:
         context: Dict[str, Any],
         log_service: FlowExecutionLogService,
         instance_service: RunningInstanceService,
+        event_service: CommunicationEventService,
         exec_ctx: Optional[ExecutionContext] = None,
     ) -> None:
         """Walk through the flow graph dispatching every node to its executor.
@@ -481,8 +582,8 @@ class ExecutionEngine:
         # Build adjacency: source node -> list of target node IDs
         adjacency: Dict[str, list] = {}
         for edge in edges:
-            src = edge.get("source")
-            tgt = edge.get("target")
+            src = edge.get("from") or edge.get("source")
+            tgt = edge.get("to") or edge.get("target")
             if src and tgt:
                 adjacency.setdefault(src, []).append(tgt)
 
@@ -508,6 +609,7 @@ class ExecutionEngine:
                 exec_ctx=exec_ctx,
                 log_service=log_service,
                 instance_service=instance_service,
+                event_service=event_service,
             )
 
             if not should_continue:
@@ -556,6 +658,7 @@ class ExecutionEngine:
                 journey_service = JourneyService(session)
                 instance_service = RunningInstanceService(session)
                 log_service = FlowExecutionLogService(session)
+                event_service = CommunicationEventService(session)
                 lead_provider: LeadProvider = LeadProviderFactory.get_provider()
 
                 instance = await instance_service.get(instance_id)
@@ -612,6 +715,17 @@ class ExecutionEngine:
                 clean_data.pop("resume_at", None)
 
                 if skip_current:
+                    if start_node.get("type") == "wait":
+                        await self._record_communication_event(
+                            event_service=event_service,
+                            running_instance_id=instance.id,
+                            journey_id=instance.journey_id,
+                            lead_id=instance.lead_id,
+                            node_id=start_node_id,
+                            event_type=CommunicationEventType.WAIT_COMPLETED.value,
+                            payload={"resumed_at": datetime.utcnow().isoformat()},
+                        )
+
                     # Schedule mode: skip current node, traverse from neighbours
                     # First update instance data to remove resume_at
                     await instance_service.update(
@@ -627,6 +741,7 @@ class ExecutionEngine:
                         exec_ctx=exec_ctx,
                         log_service=log_service,
                         instance_service=instance_service,
+                        event_service=event_service,
                     )
                 else:
                     # Retry mode: execute the current node then traverse
@@ -639,6 +754,7 @@ class ExecutionEngine:
                         exec_ctx=exec_ctx,
                         log_service=log_service,
                         instance_service=instance_service,
+                        event_service=event_service,
                     )
                     if continue_traversal:
                         await self._traverse_flow(
@@ -651,6 +767,7 @@ class ExecutionEngine:
                             exec_ctx=exec_ctx,
                             log_service=log_service,
                             instance_service=instance_service,
+                            event_service=event_service,
                         )
 
                 return True

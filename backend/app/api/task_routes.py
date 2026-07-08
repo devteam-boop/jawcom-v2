@@ -7,6 +7,7 @@ from app.core.dependencies import get_db_session
 from app.database.session import async_session_maker
 from app.services.task_service import TaskService
 from app.services.running_instance_service import RunningInstanceService
+from app.services.communication_event_service import CommunicationEventService
 
 router = APIRouter(
     prefix="/api/tasks",
@@ -33,7 +34,8 @@ async def complete_task(
     db: AsyncSession = Depends(get_db_session),
 ):
     instance_service = RunningInstanceService(db)
-    service = TaskService(instance_service)
+    event_service = CommunicationEventService(db)
+    service = TaskService(instance_service, event_service)
     try:
         result = await service.complete_task(instance_id, task_id, completed_by)
     except ValueError as e:

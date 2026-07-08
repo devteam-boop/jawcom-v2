@@ -1,5 +1,10 @@
 # JAWCOM — AI Context
 
+> Related: `architecture.md` (full detail — canonical), `module_dependencies.md`,
+> `roadmap.md`, `KNOWN_ISSUES.md`. Root `ARCHITECTURE.md`, root `PROJECT_REVIEW.md`,
+> and `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` are archived/superseded — do not use
+> them for current-state questions.
+
 ## Vision
 A configurable journey automation platform. Business events (lead stage changes) trigger flow execution. Flows are built visually via ReactFlow, validated, published, then executed by a pluggable executor engine.
 
@@ -37,6 +42,8 @@ Webhook / Test Call → Stage Mapping → Journey → Flow Definition
 - **SchedulerService** — background asyncio task, polls waiting instances every 30s
 - **RetryService** — node-level and journey-level retry with configurable policy
 - **Execution Monitor** — React dashboard with detail drawer, timeline, auto-refresh
+- **Event Dispatcher** (`app/events/`) — inbound JAWIS webhook → normalized → typed event (`LeadCreatedEvent`/`LeadStageChangedEvent`/etc.) → `EventDispatcher.dispatch()` → `CommunicationEventHandler` → `ExecutionEngine`. Registered once at FastAPI startup.
+- **Dormant scaffolds — do not extend**: `app/communication/` (`CommunicationEngine`, never instantiated) and `app/providers/` (`ProviderRegistry`/`MetaProvider`/`ResendProvider`, never imported, `ResendProvider`'s file is missing). Real WhatsApp/Email sending goes through `app/integrations/` (`JawisWhatsAppIntegration`/`JawisEmailIntegration`), not either of these.
 
 ## Current Sprint
 Sprint 16+17 — JAWIS Live Integration (completed)

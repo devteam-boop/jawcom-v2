@@ -1,5 +1,31 @@
 # JAWCOM MASTER CONTEXT
 
+> ⚠️ **ARCHIVED — SUPERSEDED, NOT THE SOURCE OF TRUTH**
+>
+> This document captured the project state as of Sprints 1-5 (2026-07-02/03):
+> "~35% complete", no product API routes, Running Instance state machine
+> "not wired to execution", `backend/app/providers/resend/resend_provider.py`
+> "missing", `server.py` merge conflict unresolved. None of that is current —
+> the project has since completed 19 sprints (execution engine, 16 executors,
+> live JAWIS integration, full REST API surface, Journey Dashboard, etc.).
+>
+> **Do not update this file going forward.** The current source of truth is:
+> - [`docs/architecture.md`](../docs/architecture.md) — implementation architecture
+> - [`docs/AI_CONTEXT.md`](../docs/AI_CONTEXT.md) — quick-reference for agents
+> - [`docs/module_dependencies.md`](../docs/module_dependencies.md) — dependency rules
+> - [`docs/roadmap.md`](../docs/roadmap.md) / [`docs/sprint_status.md`](../docs/sprint_status.md) — sprint history/status
+> - [`docs/decisions.md`](../docs/decisions.md) — ADRs
+> - [`docs/KNOWN_ISSUES.md`](../docs/KNOWN_ISSUES.md) — tech debt & limitations
+> - [`docs/api_contract.md`](../docs/api_contract.md) — live API surface
+>
+> One factual note from this file that **is** still true and has been carried
+> forward into `docs/KNOWN_ISSUES.md`: `backend/app/providers/resend/resend_provider.py`
+> genuinely does not exist on disk, even though `app/providers/__init__.py`
+> imports it — that import is broken today. It is harmless only because
+> nothing in the live app imports `app.providers`.
+>
+> Kept for historical reference only.
+
 > **Single source of truth for the JawCom project.**
 > Read this document before any development task. Update when architecture changes.
 
@@ -753,6 +779,12 @@ frontend/src/
 ---
 
 ## 15. Update Instructions
+
+> **This section is itself archived.** Do not follow it — it would recreate
+> the dual-source-of-truth problem described in the banner at the top of this
+> file. Architecture-impacting changes should be recorded in `docs/decisions.md`
+> (new ADRs), `docs/architecture.md` (structural changes), and `docs/CHANGELOG.md`
+> (dated change log), not here.
 
 ### Who should update this file
 Any AI agent or developer making architecture-impacting changes.

@@ -56,6 +56,17 @@ The engine creates its own database session internally rather than receiving one
 
 **Impact:** Low — unreachable dead code, but will break immediately if anyone tries to actually use it.
 
+### 8. `app/providers/` Is a Second, Disconnected Provider Abstraction — and Its Import Is Broken
+**Files:** `backend/app/providers/__init__.py`, `backend/app/providers/registry/provider_registry.py`
+
+There are two unrelated "provider" concepts in the codebase:
+- The **live** one: `app/execution/providers/` (`LeadProviderFactory`) and `app/integrations/` (`IntegrationFactory`) — what the engine and executors actually use.
+- A **second, dormant** one: `app/providers/` (`ProviderRegistry`, `Channel` enum, `MetaProvider`, and a referenced-but-nonexistent `ResendProvider`). Nothing in the live app imports `app.providers` — confirmed via repo-wide search, only its own `__init__.py` references it.
+
+`app/providers/__init__.py` does `from .resend.resend_provider import ResendProvider`, but **`backend/app/providers/resend/` does not exist on disk at all.** If anything ever imports `app.providers` (or `app.providers.meta`, since Python still executes the package `__init__.py`), it will raise `ModuleNotFoundError` immediately.
+
+**Impact:** Low today (nothing imports it, so the break is silent), but this module is the natural extension point for real Meta Cloud API / Resend integrations (see `docs/roadmap.md` Sprint 22, "Real Meta WhatsApp API"). Anyone picking it up will hit an immediate import error before writing a single line of new code. Either delete `app/providers/` (its intended role is fully covered by `app/integrations/`) or create the missing `resend/resend_provider.py` stub — do not build on top of it as-is.
+
 ## Known Limitations
 
 ### Functional

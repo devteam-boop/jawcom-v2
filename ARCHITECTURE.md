@@ -1,5 +1,25 @@
 # JawCom Architecture — Principal Architect Review
 
+> ⚠️ **ARCHIVED — PROPOSAL, NOT CURRENT ARCHITECTURE**
+>
+> This document is a redesign **proposal** from 2026-07-02. It was never fully
+> implemented: the frontend nav still uses the pre-proposal structure
+> (`/conversations`, standalone `/contacts`, `/automation`), and the backend
+> that was built afterward (19 completed sprints — execution engine, executor
+> framework, integrations, JAWIS live integration) diverged from this doc's
+> MongoDB/collection-based data model in favor of PostgreSQL + SQLAlchemy.
+>
+> **Current source of truth:** [`docs/architecture.md`](docs/architecture.md)
+> (implementation) and [`docs/AI_CONTEXT.md`](docs/AI_CONTEXT.md) (quick
+> reference). See also `docs/roadmap.md`, `docs/module_dependencies.md`,
+> `docs/decisions.md`, `docs/KNOWN_ISSUES.md`.
+>
+> This file is kept for its **Inbox / Timeline / Campaign / Channel
+> abstraction design ideas** (sections 11-13), which remain unimplemented and
+> may still be useful reference material for that future work. Do not treat
+> any other section (nav structure, data model, implementation order) as
+> reflecting the current codebase.
+
 > **Author**: Principal Architect Review
 > **Date**: 2026-07-02
 > **Context**: Redesign of Communication Journey architecture for JawCom (Communication OS) integrated with JAWIS (Business OS).

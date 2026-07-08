@@ -1,28 +1,32 @@
-import { MessageCircle, Mail, Instagram, Facebook, MessageSquare } from "lucide-react";
+import { MessageCircle, Mail, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const channelIcon = {
-  WhatsApp: MessageCircle,
-  Email: Mail,
-  Instagram: Instagram,
-  Facebook: Facebook,
-  SMS: MessageSquare,
+// Real CommunicationEvent.channel values are lowercase ("whatsapp", "email",
+// "system"). Any future channel (e.g. a Meta Cloud API/Resend-specific
+// value, or a new channel type entirely) falls back to a generic badge
+// instead of rendering nothing — this list is not exhaustive by design.
+const CHANNEL_ICON = {
+  whatsapp: MessageCircle,
+  email: Mail,
 };
 
-const channelColor = {
-  WhatsApp: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-  Email: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
-  Instagram: "bg-pink-500/10 text-pink-700 dark:text-pink-400",
-  Facebook: "bg-indigo-500/10 text-indigo-700 dark:text-indigo-400",
-  SMS: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+const CHANNEL_COLOR = {
+  whatsapp: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
+  email: "bg-blue-500/10 text-blue-700 dark:text-blue-400",
 };
 
 export default function ChannelBadge({ channel, className }) {
-  const Icon = channelIcon[channel] || MessageCircle;
+  const Icon = CHANNEL_ICON[channel] || Radio;
   return (
-    <span className={cn("inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider", channelColor[channel] || "bg-secondary", className)}>
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+        CHANNEL_COLOR[channel] || "bg-secondary text-secondary-foreground",
+        className
+      )}
+    >
       <Icon className="h-3 w-3" />
-      {channel}
+      {channel || "unknown"}
     </span>
   );
 }

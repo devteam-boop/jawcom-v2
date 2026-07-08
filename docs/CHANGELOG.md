@@ -1,5 +1,32 @@
 # JAWCOM — Changelog
 
+## Documentation Alignment — 2026-07-07
+
+Documentation-only pass (no code changes). Verified every architecture
+document against the current implementation, closed gaps, and archived
+stale docs so `docs/architecture.md` is the single canonical reference.
+
+### Findings
+- `docs/architecture.md`, `docs/AI_CONTEXT.md`, `docs/module_dependencies.md`, `docs/roadmap.md` — confirmed current and accurate, with a few real gaps closed (below).
+- Root `ARCHITECTURE.md` — a 2026-07-02 redesign proposal, never implemented (frontend nav still uses the pre-proposal structure). Archived with a banner; kept for its unimplemented Inbox/Timeline/Channel-abstraction design ideas.
+- Root `PROJECT_REVIEW.md` — an early-prototype snapshot (pre-domain-models), now factually wrong about current completion. Archived with a banner.
+- `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` — previously undiscovered fourth doc, self-described as "the single source of truth," describing a Sprint 1-5 snapshot (~35% complete, no product routes). Archived with a banner; its own "Update Instructions" section was neutralized to stop future dual-maintenance.
+- Confirmed one still-true factual claim from that archived doc: `backend/app/providers/resend/resend_provider.py` does not exist on disk even though `app/providers/__init__.py` imports it — a real, currently-live bug in dormant code. Recorded as `KNOWN_ISSUES.md` #8.
+- `docs/architecture.md`'s Module Boundaries table had no row for `app/communication/` at all, and its `events/`/`jawis/` dependency rows were wrong (said `services/`/`config/` only; actually `execution/`/`events/`).
+- `docs/architecture.md` had no section on the Event Dispatcher pipeline (webhook → normalization → typed event → `EventDispatcher` → `CommunicationEventHandler` → engine), no "Communication Architecture" section distinguishing the one live send path from three dormant scaffolds, and no Running Instance state-machine/lifecycle section.
+- "Data Flow: Execution Monitor" in `docs/architecture.md` was internally inconsistent with the doc's own top-of-file diagram — it omitted the Approvals/Tasks tabs and didn't name `ExecutionDrawer.jsx` as the shared component both `JourneyMonitor.jsx` and `RunningInstances.jsx` render.
+
+### Files Changed
+| File | Change |
+|---|---|
+| `docs/architecture.md` | Added Document Map banner; added `communication/` row + expanded `providers/` row to Module Boundaries; fixed `events/`/`jawis/` dependency rows; added "Event Dispatch Architecture", "Communication Architecture", "Running Instance Lifecycle" sections; rewrote "Data Flow: Execution Monitor" to match current `ExecutionDrawer.jsx` |
+| `docs/module_dependencies.md` | Added `events/` dependency graph + table row; fixed `jawis/` row; flagged `app/communication/`, `app/providers/` as dormant |
+| `docs/AI_CONTEXT.md` | Added doc-map pointer; added Event Dispatcher + dormant-scaffolds bullets to Key Components |
+| `docs/KNOWN_ISSUES.md` | Added #8 — `app/providers/` broken `ResendProvider` import |
+| `ARCHITECTURE.md` (root) | Added archive banner pointing to `docs/architecture.md` |
+| `PROJECT_REVIEW.md` (root) | Added archive banner pointing to `docs/` |
+| `AI_CONTEXT/JAWCOM_MASTER_CONTEXT.md` | Added archive banner; neutralized its own update instructions |
+
 ## JAWIS Communication Integration — 2026-07-06
 
 ### Architecture Changes

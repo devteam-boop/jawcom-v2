@@ -65,6 +65,37 @@ class Settings(BaseSettings):
         default=None, description="Default sender email address",
     )
 
+    # Meta WhatsApp Cloud API (native provider — app/providers/meta/meta_provider.py)
+    # Reuses WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID above; adds the
+    # two fields those didn't cover.
+    META_BUSINESS_ACCOUNT_ID: Optional[str] = Field(
+        default=None, description="Meta WhatsApp Business Account ID (required for template status lookups)",
+    )
+    META_API_VERSION: str = Field(
+        default="v21.0", description="Meta Graph API version used by MetaProvider",
+    )
+    META_WEBHOOK_VERIFY_TOKEN: Optional[str] = Field(
+        default=None, description="Shared secret for Meta's GET webhook verification handshake (hub.verify_token)",
+    )
+
+    # Resend Email API (native provider — app/providers/resend/resend_provider.py)
+    # Dedicated names (mirrors JAWIS_API_TOKEN vs JAWIS_API_KEY precedent);
+    # ResendProvider falls back to EMAIL_API_KEY / EMAIL_SENDER if unset.
+    RESEND_API_KEY: Optional[str] = Field(
+        default=None, description="Resend API key (falls back to EMAIL_API_KEY if unset)",
+    )
+    RESEND_FROM_EMAIL: Optional[str] = Field(
+        default=None, description="Default 'from' address for Resend (falls back to EMAIL_SENDER if unset)",
+    )
+
+    # AI Lead Assistant (Claude API — app/services/ai_lead_assistant_service.py)
+    ANTHROPIC_API_KEY: Optional[str] = Field(
+        default=None, description="Anthropic API key for the AI Lead Assistant",
+    )
+    ANTHROPIC_MODEL: str = Field(
+        default="claude-opus-4-8", description="Claude model used by the AI Lead Assistant",
+    )
+
     # JAWIS
     JAWIS_BASE_URL: Optional[str] = Field(
         default=None, description="JAWIS API base URL, e.g. https://api.jawis.io",
@@ -84,6 +115,12 @@ class Settings(BaseSettings):
     )
     JAWIS_CRM_PROVIDER: str = Field(
         default="dummy", description="CRM integration backend: dummy or jawis",
+    )
+    JAWIS_WHATSAPP_PROVIDER: str = Field(
+        default="jawis", description="WhatsApp integration backend: dummy, jawis, or meta",
+    )
+    JAWIS_EMAIL_PROVIDER: str = Field(
+        default="jawis", description="Email integration backend: dummy, jawis, or resend",
     )
 
     # CORS

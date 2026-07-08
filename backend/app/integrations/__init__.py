@@ -19,12 +19,25 @@ from .jawis_communication import (
     JawisWhatsAppIntegration,
     JawisEmailIntegration,
 )
+from .native_providers import (
+    NativeProviderError,
+    MetaWhatsAppIntegration,
+    ResendEmailIntegration,
+)
 
-# Auto-register built‑in integrations
-IntegrationFactory.register("whatsapp", JawisWhatsAppIntegration)
-IntegrationFactory.register("email", JawisEmailIntegration)
+# Auto-register built‑in integrations.
+# "whatsapp"/"email" are no longer registered directly — like "crm", they
+# are now pure aliases (see factory.py) resolved by JAWIS_WHATSAPP_PROVIDER
+# / JAWIS_EMAIL_PROVIDER, defaulting to "jawis" so default behavior is
+# unchanged. JawisWhatsAppIntegration.name/JawisEmailIntegration.name still
+# report "whatsapp"/"email" (unchanged) so the default /api/integrations/health
+# response is byte-for-byte identical to before this registry key rename.
+IntegrationFactory.register("whatsapp_jawis", JawisWhatsAppIntegration)
+IntegrationFactory.register("email_jawis", JawisEmailIntegration)
 IntegrationFactory.register("whatsapp_dummy", WhatsAppIntegration)
 IntegrationFactory.register("email_dummy", EmailIntegration)
+IntegrationFactory.register("whatsapp_meta", MetaWhatsAppIntegration)
+IntegrationFactory.register("email_resend", ResendEmailIntegration)
 IntegrationFactory.register("notification", NotificationIntegration)
 IntegrationFactory.register("crm_dummy", DummyCRMIntegration)
 IntegrationFactory.register("crm_jawis", JawisCRMIntegration)
@@ -41,4 +54,7 @@ __all__ = [
     "JawisCommunicationIntegration",
     "JawisWhatsAppIntegration",
     "JawisEmailIntegration",
+    "NativeProviderError",
+    "MetaWhatsAppIntegration",
+    "ResendEmailIntegration",
 ]

@@ -3,6 +3,7 @@ import AppLayout from "@/layouts/AppLayout";
 import Dashboard from "@/pages/Dashboard";
 import Conversations from "@/pages/Conversations";
 import Contacts from "@/pages/Contacts";
+import LeadActivity from "@/pages/LeadActivity";
 import Campaigns from "@/pages/Campaigns";
 import JourneyDetail from "@/pages/JourneyDetail";
 import JourneyMonitor from "@/pages/JourneyMonitor";
@@ -28,6 +29,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/conversations" element={<Conversations />} />
             <Route path="/contacts" element={<Contacts />} />
+            <Route path="/leads/:leadId" element={<LeadActivity />} />
             <Route path="/customers" element={<Navigate to="/contacts" replace />} />
             <Route path="/companies" element={<Navigate to="/contacts" replace />} />
             <Route path="/campaigns" element={<Campaigns />} />

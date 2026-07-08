@@ -19,6 +19,11 @@ from app.api import (
     task_router,
     template_router,
     integration_router,
+    communication_event_router,
+    meta_webhook_router,
+    resend_webhook_router,
+    ai_assistant_router,
+    ai_summary_router,
 )
 from app.events.dispatcher import get_dispatcher
 from app.jawis.webhook import get_webhook_handler
@@ -62,6 +67,11 @@ app.include_router(approval_router)
 app.include_router(task_router)
 app.include_router(template_router)
 app.include_router(integration_router)
+app.include_router(communication_event_router)
+app.include_router(meta_webhook_router)
+app.include_router(resend_webhook_router)
+app.include_router(ai_assistant_router)
+app.include_router(ai_summary_router)
 
 
 _scheduler = None

@@ -1,3 +1,22 @@
+> ⚠️ **ARCHIVED — OBSOLETE, DOES NOT REFLECT THE CURRENT CODEBASE**
+>
+> This review describes an early prototype snapshot (MongoDB backend scaffold,
+> zero domain models, "28% complete", dummy-data-only frontend). The backend
+> has since gone through 19 completed sprints: 15 registered SQLAlchemy models,
+> a working execution engine with 16 node executors, live JAWIS integration,
+> and real API routes for every module listed below as "missing." None of the
+> completion percentages, feature-status tables, or "missing backend modules"
+> in this document are accurate for the current codebase.
+>
+> **Current source of truth:** [`docs/architecture.md`](docs/architecture.md),
+> [`docs/AI_CONTEXT.md`](docs/AI_CONTEXT.md), [`docs/roadmap.md`](docs/roadmap.md),
+> [`docs/sprint_status.md`](docs/sprint_status.md), [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md)
+> — those documents' "Known Limitations" sections are the accurate, current
+> equivalent of this review's gap analysis (auth, testing, multi-tenancy, etc.
+> are still genuinely missing — but everything else here is stale).
+>
+> Kept for historical reference only.
+
 # 1. Executive Summary
 
 ## What this project is

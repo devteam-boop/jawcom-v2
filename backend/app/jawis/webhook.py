@@ -2,6 +2,7 @@
 
 from typing import Dict, Any, List, Optional
 import logging
+import uuid
 from datetime import datetime
 from fastapi import HTTPException
 
@@ -10,6 +11,53 @@ from ..events.event_types import create_event_from_type
 from .schemas import WebhookEventSchema, WebhookResponseSchema
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_jawis_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize an incoming JAWIS webhook payload into the internal
+    ``event_id`` / ``event_type`` / ``data`` shape expected by
+    :class:`WebhookEventSchema`.
+
+    Two shapes are accepted on the wire:
+
+    Legacy (already internal shape) - passed through unchanged::
+
+        {"event_id": ..., "event_type": ..., "data": {...}, ...}
+
+    JAWIS native (flat, stage-change specific)::
+
+        {"event": "lead.stage_changed", "lead_id": ..., "old_stage": ..., "new_stage": ...}
+
+    Any payload that matches neither shape is returned unchanged so the
+    existing "unsupported event type" handling in ``handle_webhook`` still
+    applies.
+    """
+    if "event_type" in payload:
+        # Already the internal/legacy shape.
+        return payload
+
+    event_type = payload.get("event")
+
+    if event_type == "lead.stage_changed":
+        data: Dict[str, Any] = {}
+        if "lead_id" in payload:
+            data["lead_id"] = str(payload["lead_id"])
+        if "old_stage" in payload:
+            data["from_stage_key"] = payload["old_stage"]
+        if "new_stage" in payload:
+            data["to_stage_key"] = payload["new_stage"]
+
+        return {
+            "event_id": payload.get("event_id") or str(uuid.uuid4()),
+            "event_type": event_type,
+            "timestamp": payload.get("timestamp") or datetime.utcnow().isoformat(),
+            "source": payload.get("source", "jawis"),
+            "data": data,
+            "metadata": payload.get("metadata", {}),
+        }
+
+    # Unknown shape - leave untouched for existing error handling to report.
+    return payload
 
 
 class JawisWebhookHandler:
@@ -37,6 +85,10 @@ class JawisWebhookHandler:
             WebhookResponseSchema with processing result
         """
         try:
+            # Normalize supported wire formats (legacy + JAWIS-native) into
+            # the internal event_id/event_type/data shape before validating.
+            webhook_data = normalize_jawis_payload(webhook_data)
+
             # Validate webhook data
             webhook_event = WebhookEventSchema(**webhook_data)
             

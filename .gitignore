@@ -84,7 +84,12 @@ frontend/node_modules/.cache/default-development/11.pack
 frontend/node_modules/.cache/default-development/2.pack
 frontend/node_modules/.cache/default-development/9.pack
 frontend/node_modules/.cache/default-development/10.pack
-<<<<<<< HEAD
 .aider*
-=======
->>>>>>> 321075ad65aa3df54916ae638505753705e9661b
+
+# Environment files (never commit real secrets)
+.env
+.env.*
+!.env.example
+!*/.env.example
+backend/.env
+frontend/.env

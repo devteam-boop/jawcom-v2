@@ -57,6 +57,30 @@
                                   │ JawisLeadProvider    │
                                   └─────────────────────┘
 
+events/ (inbound webhook → typed event → dispatch)
+  api/main.py (POST /api/webhooks/jawis) ──► jawis/webhook.py (normalize_jawis_payload)
+                                                  │
+                                                  ▼
+                                          events/event_types.py (create_event_from_type)
+                                                  │
+                                                  ▼
+                                          events/dispatcher.py (EventDispatcher.dispatch)
+                                                  │
+                                                  ▼
+                                          events/handlers.py (CommunicationEventHandler)
+                                                  │ constructs ExecutionEngine directly
+                                                  ▼
+                                          execution/engine.py (handle_lead_created / handle_lead_stage_changed)
+
+  Handler registration happens once at FastAPI startup (main.py), not per-request.
+
+Dormant modules — not part of any dependency chain above, not imported by
+live code, do not extend without first reading `architecture.md`'s
+"Communication Architecture" section:
+  app/communication/  (CommunicationEngine — never instantiated)
+  app/providers/       (ProviderRegistry/MetaProvider/ResendProvider — never imported;
+                         ResendProvider's target file doesn't exist on disk)
+
 templates/ (Sprint 18 — same layer as services/, own top-level package)
   api/template_routes.py ──► templates/services.py (TemplateService)
                                   │ depends on
@@ -80,7 +104,8 @@ templates/ (Sprint 18 — same layer as services/, own top-level package)
 | `execution/executors/` | execution/executors/base.py, app/integrations/ | services/, models/, repositories/, api/, `app/templates/` |
 | `integrations/` | config/ (settings) | services/, models/, repositories/, api/, execution/ |
 | `execution/providers/` | (stdlib only) | services/, models/, api/ |
-| `jawis/` | config/ | services/, repositories/, models/ |
+| `events/` | `execution/` (`CommunicationEventHandler` constructs `ExecutionEngine` directly) | api/, repositories/, models/ |
+| `jawis/` | config/, `events/` (`webhook.py` dispatches through `EventDispatcher`) | services/, repositories/, models/ |
 | `templates/` | repositories/, models/ | api/, execution/ (only the engine imports `templates/`; executors receive a `TemplateService` instance via `exec_ctx.template_service`, never import `templates/` directly) |
 
 ## Forbidden Dependencies

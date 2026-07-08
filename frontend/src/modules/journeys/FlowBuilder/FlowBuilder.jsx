@@ -50,23 +50,37 @@ const NODE_TYPES = {
 };
 
 function toRfNodes(apiNodes) {
-  return (apiNodes || []).map((n) => ({
-    id: n.id,
-    type: n.type,
-    position: { x: n.x, y: n.y },
-    data: { label: n.label, config: n.config || {} },
-  }));
+  return (apiNodes || []).map((n) => {
+    const x = Number(n.position?.x ?? n.x ?? 0);
+    const y = Number(n.position?.y ?? n.y ?? 0);
+    return {
+      id: n.id ?? crypto.randomUUID(),
+      type: n.type ?? "default",
+      position: {
+        x: Number.isNaN(x) ? 0 : x,
+        y: Number.isNaN(y) ? 0 : y,
+      },
+      data: { label: n.label, config: n.config || {} },
+    };
+  });
 }
 
 function toRfEdges(apiEdges) {
-  return (apiEdges || []).map((e, i) => ({
-    id: `e-${e.from}-${e.to}-${i}`,
-    source: e.from,
-    target: e.to,
-    label: e.label || "",
-    type: "smoothstep",
-    markerEnd: { type: MarkerType.ArrowClosed },
-  }));
+  return (apiEdges || [])
+    .map((e, i) => {
+      const source = e.source ?? e.from;
+      const target = e.target ?? e.to;
+      if (source == null || target == null) return null;
+      return {
+        id: `e-${source}-${target}-${i}`,
+        source,
+        target,
+        label: e.label || "",
+        type: "smoothstep",
+        markerEnd: { type: MarkerType.ArrowClosed },
+      };
+    })
+    .filter(Boolean);
 }
 
 function toApiNodes(rfNodes) {

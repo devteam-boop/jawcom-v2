@@ -4,6 +4,9 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.services.running_instance_service import RunningInstanceService
+from app.services.communication_event_service import CommunicationEventService
+from app.communication_events.schemas import CommunicationEventCreateSchema
+from app.models.communication_event import CommunicationEventType
 
 logger = logging.getLogger(__name__)
 
@@ -11,8 +14,13 @@ logger = logging.getLogger(__name__)
 class TaskService:
     """Manages manual tasks stored in RunningJourneyInstance.data JSON column."""
 
-    def __init__(self, instance_service: RunningInstanceService):
+    def __init__(
+        self,
+        instance_service: RunningInstanceService,
+        event_service: Optional[CommunicationEventService] = None,
+    ):
         self._instance_service = instance_service
+        self._event_service = event_service
 
     async def list_tasks(self, instance_id: UUID) -> List[dict]:
         instance = await self._instance_service.get(instance_id)
@@ -46,6 +54,22 @@ class TaskService:
         data.pop("current_task_id", None)
 
         await self._instance_service.update(instance_id, type("", (), {"model_dump": lambda self, **kw: {"data": data}})())
+
+        if self._event_service:
+            try:
+                await self._event_service.create(
+                    CommunicationEventCreateSchema(
+                        running_instance_id=instance.id,
+                        journey_id=instance.journey_id,
+                        lead_id=instance.lead_id,
+                        node_id=task.get("node_id"),
+                        event_type=CommunicationEventType.TASK_COMPLETED.value,
+                        payload={"task_id": task_id, "title": task.get("title"), "completed_by": completed_by},
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to record TASK_COMPLETED communication event for task %s", task_id)
+
         logger.info("Task %s completed by %s for instance %s", task_id, completed_by, instance_id)
         return task
 
