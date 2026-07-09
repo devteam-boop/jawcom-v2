@@ -37,7 +37,7 @@ _EVENT_MAP = {
 }
 
 
-@router.post("/")
+@router.post("")
 async def receive_resend_webhook(
     payload: Dict[str, Any],
     db: AsyncSession = Depends(get_db_session),
