@@ -25,6 +25,7 @@ from app.api import (
     ai_assistant_router,
     ai_summary_router,
     message_router,
+    debug_router,
 )
 from app.events.dispatcher import get_dispatcher
 from app.jawis.webhook import get_webhook_handler
@@ -74,6 +75,7 @@ app.include_router(resend_webhook_router)
 app.include_router(ai_assistant_router)
 app.include_router(ai_summary_router)
 app.include_router(message_router)
+app.include_router(debug_router)
 
 
 _scheduler = None

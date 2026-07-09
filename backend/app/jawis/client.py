@@ -49,7 +49,7 @@ class JawisClient:
             api_key: JAWIS API key (defaults to settings)
         """
         settings = get_settings()
-        self.base_url = base_url or settings.JAWIS_API_URL
+        self.base_url = base_url or settings.JAWIS_BASE_URL
         self.api_key = api_key or settings.JAWIS_API_KEY
         self.timeout = 30.0
         
