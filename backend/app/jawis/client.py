@@ -226,7 +226,9 @@ class JawisClient:
         """
         try:
             data = await self._make_request(f"/api/companies/{company_id}")
-            return CompanySchema(**data["company"]) if data.get("company") else None
+            payload = data.get("data", data) if isinstance(data, dict) else data
+            company_data = payload.get("company") if isinstance(payload, dict) else None
+            return CompanySchema(**company_data) if company_data else None
         except JawisApiError as e:
             if e.status_code == 404:
                 return None
@@ -245,7 +247,9 @@ class JawisClient:
         """
         try:
             data = await self._make_request(f"/api/stages/{stage_key}")
-            return StageSchema(**data["stage"]) if data.get("stage") else None
+            payload = data.get("data", data) if isinstance(data, dict) else data
+            stage_data = payload.get("stage") if isinstance(payload, dict) else None
+            return StageSchema(**stage_data) if stage_data else None
         except JawisApiError as e:
             if e.status_code == 404:
                 return None
@@ -264,7 +268,9 @@ class JawisClient:
         """
         try:
             data = await self._make_request(f"/api/users/{user_id}")
-            return UserSchema(**data["user"]) if data.get("user") else None
+            payload = data.get("data", data) if isinstance(data, dict) else data
+            user_data = payload.get("user") if isinstance(payload, dict) else None
+            return UserSchema(**user_data) if user_data else None
         except JawisApiError as e:
             if e.status_code == 404:
                 return None
@@ -325,7 +331,9 @@ class JawisClient:
         """
         try:
             data = await self._make_request("/api/stages")
-            return [StageSchema(**stage) for stage in data.get("stages", [])]
+            payload = data.get("data", data) if isinstance(data, dict) else data
+            stages = payload.get("stages", []) if isinstance(payload, dict) else []
+            return [StageSchema(**stage) for stage in stages]
         except JawisApiError as e:
             logger.error(f"Error fetching stages: {str(e)}")
             return []
