@@ -64,7 +64,11 @@ def _plain_text_to_html(text: str) -> str:
 
 class EmailSendRequest(BaseModel):
     lead_id: int
-    template_key: str
+    # Optional: a manual custom email (no template) sends template_key=null
+    # and supplies the final subject/body directly via variables.subject /
+    # variables.body instead. When set, behavior is unchanged — the
+    # template is fetched and rendered exactly as before.
+    template_key: Optional[str] = None
     # Required: JAWIS supplies the lead's active stage at send time. JawCom
     # never looks this up itself (no get_lead_context()/CRM call) — it's
     # persisted into communication_events as-is and never mutated after
@@ -94,11 +98,15 @@ async def send_email(
     request: EmailSendRequest,
     db: AsyncSession = Depends(get_db_session),
 ):
-    # ── 1. Validate request ────────────────────────────────────────
-    try:
-        template_uuid = UUID(request.template_key)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid template_key: {request.template_key!r}")
+    # ── 1. Validate request. template_key is optional — null means a
+    #        manual custom email (no template); only validate/parse it
+    #        when one was actually provided. ──────────────────────────
+    template_uuid: Optional[UUID] = None
+    if request.template_key is not None:
+        try:
+            template_uuid = UUID(request.template_key)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid template_key: {request.template_key!r}")
 
     # ── 2/3. Fetch lead via the lightweight JAWIS lead lookup (get_lead(),
     #        NOT get_lead_context() — manual sends need only name/email/
@@ -116,25 +124,36 @@ async def send_email(
     if not recipient_email:
         raise HTTPException(status_code=400, detail=f"Lead {request.lead_id} has no email address on file")
 
-    # ── 4/5. Fetch + render template via the existing TemplateService ──
-    template_service = TemplateService(db)
-    try:
-        template = await template_service.get_template(template_uuid)
-    except TemplateNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    # ── 4/5. Fetch + render template via the existing TemplateService —
+    #        OR, when template_key is null, treat this as a manual custom
+    #        email: subject/body come directly from variables.subject /
+    #        variables.body, used as-is (no template to look up, nothing
+    #        to validate against a channel, no Jinja2 pass — this already
+    #        *is* the final content, not a template containing it). ──────
+    if template_uuid is not None:
+        template_service = TemplateService(db)
+        try:
+            template = await template_service.get_template(template_uuid)
+        except TemplateNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
-    if template.channel != "email":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Template {request.template_key} is a '{template.channel}' template, not 'email'",
-        )
+        if template.channel != "email":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Template {request.template_key} is a '{template.channel}' template, not 'email'",
+            )
 
-    try:
-        rendered = template_service.renderer.render_email(
-            template.subject or "", template.content, request.variables
-        )
-    except TemplateValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        try:
+            rendered = template_service.renderer.render_email(
+                template.subject or "", template.content, request.variables
+            )
+        except TemplateValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    else:
+        rendered = {
+            "subject": request.variables.get("subject", ""),
+            "content": request.variables.get("body", ""),
+        }
 
     # ── 6. Send via the existing Resend integration (never JAWIS). The
     #        recipient was already resolved once in step 2/3 above — passed
