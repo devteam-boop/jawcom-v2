@@ -25,6 +25,7 @@ complained) can always correlate via record_inbound_status(), regardless
 of which caller sent the email.
 """
 
+import asyncio
 import logging
 from html import escape as html_escape
 from typing import Any, Dict, Optional
@@ -36,17 +37,72 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db_session
+from app.database.session import async_session_maker
 from app.templates.services import TemplateService
 from app.templates.exceptions import TemplateNotFoundError, TemplateValidationError
 from app.integrations import IntegrationFactory, NativeProviderError
 from app.jawis.client import get_jawis_client
 from app.communication_events.schemas import CommunicationEventCreateSchema
 from app.models.communication_event import CommunicationEventType, CommunicationEventChannel
+from app.repositories.communication_event_repository import CommunicationEventRepository
 from app.services.communication_event_service import CommunicationEventService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/messages", tags=["Messages"])
+
+
+async def _fetch_and_store_rfc822_message_id(event_id: str, provider_message_id: str) -> None:
+    """Background task: fetch Resend's RFC822 Message-ID (GET /emails/{id})
+    and store it on the already-created EMAIL_SENT CommunicationEvent.
+
+    Runs AFTER the response has already been returned to the caller — this
+    is what used to block the request (up to a 15s ceiling); moved out of
+    the request-response path so JAWIS's 12s client timeout is never at
+    risk from this specific call. Uses its own DB session (the request's
+    session is gone by the time this runs, same pattern as
+    CommunicationEventService._publish_to_jawis).
+
+    Reply matching (record_email_reply's rfc822_message_id lookup) works
+    exactly as before once this completes — a reply arriving in the brief
+    window before it does simply won't match on this path yet; Gmail sync
+    runs every 5 minutes, so this is not a practical race.
+    """
+    try:
+        from app.providers import provider_registry, Channel
+        email_provider = provider_registry.get_provider(Channel.EMAIL)
+        if email_provider is None:
+            return
+        fetched = await email_provider._fetch_email(provider_message_id)
+        rfc822_message_id = (fetched or {}).get("message_id")
+    except Exception as exc:
+        logger.warning(
+            "Background rfc822_message_id fetch failed for provider_message_id=%s: %s "
+            "— this message's replies won't be matchable via Message-ID/References "
+            "(threadId-cache matching may still work if another message in the same "
+            "thread succeeds)",
+            provider_message_id, exc,
+        )
+        return
+
+    if not rfc822_message_id:
+        return
+
+    async with async_session_maker() as db:
+        try:
+            repo = CommunicationEventRepository(db)
+            event = await repo.get(UUID(event_id))
+            if event is None:
+                return
+            payload = dict(event.payload or {})
+            payload["rfc822_message_id"] = rfc822_message_id
+            event.payload = payload
+            await repo.update(event)
+        except Exception as exc:
+            logger.warning(
+                "Could not store rfc822_message_id for communication_event_id=%s: %s",
+                event_id, exc,
+            )
 
 
 def _plain_text_to_html(text: str) -> str:
@@ -114,8 +170,6 @@ async def send_email(
     #        stage_key, which this lightweight endpoint doesn't return) ──
     jawis_client = get_jawis_client()
     lead = await jawis_client.get_lead(str(request.lead_id))
-    # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
-    logger.info("TEMP DEBUG [11] Object received by message_routes.py before validation: %s", lead)
     if not lead:
         raise HTTPException(status_code=404, detail=f"Lead {request.lead_id} not found")
 
@@ -218,36 +272,18 @@ async def send_email(
 
     provider_message_id = result.get("provider_message_id")
 
-    # ── 6b. Capture the outbound RFC822 Message-ID (Resend's POST /emails
-    #         response only returns their internal id; the RFC822 Message-ID
-    #         a reply's In-Reply-To/References will actually reference is
-    #         only exposed via a follow-up GET). Needed for Gmail reply
-    #         matching (app/gmail_sync/service.py); non-fatal on failure —
-    #         the send already succeeded, so a lookup hiccup here only
-    #         degrades this one message's reply-matching, not the send. ──
-    rfc822_message_id: Optional[str] = None
-    if provider_message_id:
-        try:
-            from app.providers import provider_registry, Channel
-            email_provider = provider_registry.get_provider(Channel.EMAIL)
-            if email_provider is not None:
-                fetched = await email_provider._fetch_email(provider_message_id)
-                rfc822_message_id = (fetched or {}).get("message_id")
-        except Exception as exc:
-            logger.warning(
-                "Could not capture rfc822_message_id for provider_message_id=%s: %s "
-                "— this message's replies won't be matchable via Message-ID/References "
-                "(threadId-cache matching may still work if another message in the same "
-                "thread succeeds)",
-                provider_message_id, exc,
-            )
-
     # ── 7. Record EMAIL_SENT for every send. Journey-originated sends
     #        (context_id set) get a real running_instance_id; manual/
     #        general sends (context_id=None) get running_instance_id=NULL —
     #        both are stored in communication_events (nullable FK, see
     #        migration b4c5d6e7f8a9) so webhooks can correlate delivered/
-    #        opened/bounced/replied against either kind. ─────────────────
+    #        opened/bounced/replied against either kind. The RFC822
+    #        Message-ID (needed for Gmail reply matching) is NOT fetched
+    #        here — Resend's POST response only returns their internal id;
+    #        the RFC822 id is only available via a follow-up GET, which
+    #        used to be awaited inline (up to a 15s ceiling) and is now a
+    #        background task fired after this event exists, so the
+    #        response returns immediately after the DB write. ────────────
     communication_event_id: Optional[str] = None
     try:
         running_instance_id = str(UUID(request.context_id)) if request.context_id else None
@@ -265,13 +301,17 @@ async def send_email(
                     "variables": request.variables,
                     "module": request.module,
                     "stage": request.stage,
-                    "rfc822_message_id": rfc822_message_id,
+                    "rfc822_message_id": None,
                     "source": "manual",
                     "status": result.get("status", "sent"),
                 },
             )
         )
         communication_event_id = event.id
+        if provider_message_id:
+            asyncio.create_task(
+                _fetch_and_store_rfc822_message_id(event.id, provider_message_id)
+            )
     except (ValueError, IntegrityError) as exc:
         await db.rollback()
         logger.warning(
