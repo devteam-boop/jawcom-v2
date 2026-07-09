@@ -66,10 +66,21 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
         await asyncio.sleep(0.1)
 
         # ── Build integration request ──────────────────────────────
+        # exec_ctx.lead is already resolved by the engine for this node
+        # (no extra lookup) — recipient_phone/recipient_name are included
+        # alongside the existing recipient=lead_id so that if the
+        # "whatsapp" alias ever points at whatsapp_meta
+        # (JAWIS_WHATSAPP_PROVIDER=meta), that integration has what it
+        # needs without performing its own lead lookup. JawisWhatsAppIntegration
+        # (the default target) forwards the whole payload to JAWIS verbatim,
+        # so these extra keys are a no-op for the default path.
+        resolved_lead = getattr(exec_ctx, "lead", None) if exec_ctx else None
         request_payload = {
             "template_name": resolved_template,
             "variables": resolved_variables,
             "recipient": getattr(running_instance, "lead_id", lead_id),
+            "recipient_phone": (resolved_lead or {}).get("phone"),
+            "recipient_name": (resolved_lead or {}).get("name"),
         }
         integration = IntegrationFactory.get("whatsapp")
         integration_response = await integration.execute(request_payload)

@@ -2,7 +2,10 @@
 
 Standalone send endpoint — not tied to the Journey Engine or a flow node.
 Reuses existing services only:
-  - LeadProviderFactory (fetch lead + resolve recipient email)
+  - JawisClient.get_lead() (lightweight lead lookup: id/name/email/phone/city
+    only — NOT LeadProviderFactory/get_lead_context(), which requires
+    stage_key and is reserved for Journey Engine execution; manual sends
+    don't need stage/company/owner)
   - TemplateService (fetch template, render via its own TemplateRenderer —
     no rendering logic is duplicated here)
   - the existing Resend integration ("email_resend", NOT the "email" alias,
@@ -34,7 +37,7 @@ from app.core.dependencies import get_db_session
 from app.templates.services import TemplateService
 from app.templates.exceptions import TemplateNotFoundError, TemplateValidationError
 from app.integrations import IntegrationFactory, NativeProviderError
-from app.execution.providers import LeadProviderFactory
+from app.jawis.client import get_jawis_client
 from app.communication_events.schemas import CommunicationEventCreateSchema
 from app.models.communication_event import CommunicationEventType, CommunicationEventChannel
 from app.services.communication_event_service import CommunicationEventService
@@ -77,16 +80,19 @@ async def send_email(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid template_key: {request.template_key!r}")
 
-    # ── 2/3. Fetch lead via the existing Lead Provider, resolve email ──
-    lead_provider = LeadProviderFactory.get_provider()
-    lead_context = await lead_provider.get_lead_context(request.lead_id)
+    # ── 2/3. Fetch lead via the lightweight JAWIS lead lookup (get_lead(),
+    #        NOT get_lead_context() — manual sends need only name/email/
+    #        phone, not stage/company/owner, and get_lead_context() requires
+    #        stage_key, which this lightweight endpoint doesn't return) ──
+    jawis_client = get_jawis_client()
+    lead = await jawis_client.get_lead(str(request.lead_id))
     # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
-    logger.info("TEMP DEBUG [11] Object received by message_routes.py before validation: %s", lead_context)
-    lead = (lead_context or {}).get("lead") or {}
+    logger.info("TEMP DEBUG [11] Object received by message_routes.py before validation: %s", lead)
     if not lead:
         raise HTTPException(status_code=404, detail=f"Lead {request.lead_id} not found")
 
-    recipient_email = lead.get("email")
+    recipient_name = lead.name
+    recipient_email = lead.email
     if not recipient_email:
         raise HTTPException(status_code=400, detail=f"Lead {request.lead_id} has no email address on file")
 
@@ -110,13 +116,18 @@ async def send_email(
     except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # ── 6. Send via the existing Resend integration (never JAWIS) ──────
+    # ── 6. Send via the existing Resend integration (never JAWIS). The
+    #        recipient was already resolved once in step 2/3 above — passed
+    #        in directly so the integration performs no lead lookup of its
+    #        own (no second JAWIS call). ──────────────────────────────────
     integration = IntegrationFactory.get("email_resend")
     try:
         result = await integration.execute({
+            "recipient_email": recipient_email,
+            "recipient_name": recipient_name,
             "subject": rendered["subject"],
-            "content": rendered["content"],
-            "recipient": request.lead_id,
+            "text": rendered["content"],
+            "html": None,
         })
     except NativeProviderError as exc:
         logger.warning("Email send failed for lead=%s template=%s: %s", request.lead_id, request.template_key, exc)
@@ -203,14 +214,17 @@ async def send_whatsapp(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid template_key: {request.template_key!r}")
 
-    # ── 2/3. Fetch lead via the existing Lead Provider, resolve phone ──
-    lead_provider = LeadProviderFactory.get_provider()
-    lead_context = await lead_provider.get_lead_context(request.lead_id)
-    lead = (lead_context or {}).get("lead") or {}
+    # ── 2/3. Fetch lead via the lightweight JAWIS lead lookup (get_lead(),
+    #        NOT get_lead_context() — manual sends need only name/email/
+    #        phone, not stage/company/owner, and get_lead_context() requires
+    #        stage_key, which this lightweight endpoint doesn't return) ──
+    jawis_client = get_jawis_client()
+    lead = await jawis_client.get_lead(str(request.lead_id))
     if not lead:
         raise HTTPException(status_code=404, detail=f"Lead {request.lead_id} not found")
 
-    recipient_phone = lead.get("phone")
+    recipient_name = lead.name
+    recipient_phone = lead.phone
     if not recipient_phone:
         raise HTTPException(status_code=400, detail=f"Lead {request.lead_id} has no phone number on file")
 
@@ -239,13 +253,17 @@ async def send_whatsapp(
     except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # ── 6. Send via the existing Meta integration (never JAWIS) ────────
+    # ── 6. Send via the existing Meta integration (never JAWIS). The
+    #        recipient was already resolved once in step 2/3 above — passed
+    #        in directly so the integration performs no lead lookup of its
+    #        own (no second JAWIS call). ──────────────────────────────────
     integration = IntegrationFactory.get("whatsapp_meta")
     try:
         result = await integration.execute({
+            "recipient_phone": recipient_phone,
+            "recipient_name": recipient_name,
             "template_name": template.name,
             "variables": request.variables,
-            "recipient": request.lead_id,
         })
     except NativeProviderError as exc:
         logger.warning("WhatsApp send failed for lead=%s template=%s: %s", request.lead_id, request.template_key, exc)

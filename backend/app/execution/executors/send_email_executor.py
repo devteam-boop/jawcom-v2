@@ -71,11 +71,22 @@ class SendEmailExecutor(BaseNodeExecutor):
         await asyncio.sleep(0.1)
 
         # ── Build integration request ──────────────────────────────
+        # exec_ctx.lead is already resolved by the engine for this node
+        # (no extra lookup) — recipient_email/recipient_name are included
+        # alongside the existing recipient=lead_id so that if the "email"
+        # alias ever points at email_resend (JAWIS_EMAIL_PROVIDER=resend),
+        # that integration has what it needs without performing its own
+        # lead lookup. JawisEmailIntegration (the default target) forwards
+        # the whole payload to JAWIS verbatim, so these extra keys are a
+        # no-op for the default path.
+        resolved_lead = getattr(exec_ctx, "lead", None) if exec_ctx else None
         request_payload = {
             "subject": resolved_subject,
             "template_name": resolved_template,
             "content": resolved_content,
             "recipient": getattr(running_instance, "lead_id", lead_id),
+            "recipient_email": (resolved_lead or {}).get("email"),
+            "recipient_name": (resolved_lead or {}).get("name"),
         }
         integration = IntegrationFactory.get("email")
         integration_response = await integration.execute(request_payload)

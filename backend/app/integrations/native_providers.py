@@ -11,11 +11,21 @@ Registered as ``"whatsapp_meta"`` / ``"email_resend"``. The ``"whatsapp"``/
 / ``JAWIS_EMAIL_PROVIDER=resend`` (see ``factory.py``) — default stays
 JAWIS, unchanged.
 
-Executors pass only ``{"recipient": lead_id, ...}`` (unchanged — no
-execution logic changes). Unlike JAWIS, Meta/Resend need an actual phone
-number / email address, so this integration resolves it itself via the
-existing ``LeadProviderFactory`` — the same seam the engine already uses,
-not a new one.
+These integrations do NOT resolve the recipient themselves — no
+LeadProviderFactory, no get_lead_context(), no get_lead(), no JAWIS call of
+any kind. The caller (app/api/message_routes.py, the Communication Engine)
+resolves recipient_email/recipient_phone/recipient_name exactly once and
+passes them in the payload. This class only talks to Resend/Meta.
+
+app/execution/executors/send_email_executor.py and send_whatsapp_executor.py
+(Journey Engine) call IntegrationFactory.get("email")/get("whatsapp") — the
+alias keys, which resolve to THIS module's classes only if an operator sets
+JAWIS_EMAIL_PROVIDER=resend / JAWIS_WHATSAPP_PROVIDER=meta (default stays
+"jawis", i.e. jawis_communication.py's classes). Those two executors already
+include recipient_email/recipient_phone/recipient_name in their payload
+(sourced from exec_ctx.lead — data the engine already resolved for the
+node, no extra lookup added), so this module works correctly under either
+alias target without performing any lead lookup of its own.
 
 Raises ``NativeProviderError`` on failure — matching
 ``JawisCommunicationIntegration``'s convention (ADR-017) — so switching
@@ -30,7 +40,6 @@ from .base import BaseIntegration
 from app.providers import provider_registry, Channel
 from app.providers.meta.meta_provider import MetaProvider
 from app.providers.resend.resend_provider import ResendProvider
-from app.execution.providers import LeadProviderFactory
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +67,11 @@ class MetaWhatsAppIntegration(BaseIntegration):
         if provider is None:
             raise NativeProviderError("Meta WhatsApp provider not registered")
 
-        lead_id = payload.get("recipient")
-        lead_context = await LeadProviderFactory.get_provider().get_lead_context(int(lead_id))
-        phone = (lead_context.get("lead") or {}).get("phone")
+        # Recipient is resolved exactly once by the caller and passed in —
+        # this integration performs no lead lookup of its own.
+        phone = payload.get("recipient_phone")
         if not phone:
-            raise NativeProviderError(f"No phone number available for lead {lead_id}")
+            raise NativeProviderError("No phone number available for recipient")
 
         variables = payload.get("variables") or {}
         result = await provider.send_template_message(
@@ -101,16 +110,17 @@ class ResendEmailIntegration(BaseIntegration):
         if provider is None:
             raise NativeProviderError("Resend email provider not registered")
 
-        lead_id = payload.get("recipient")
-        lead_context = await LeadProviderFactory.get_provider().get_lead_context(int(lead_id))
-        email_address = (lead_context.get("lead") or {}).get("email")
+        # Recipient is resolved exactly once by the caller and passed in —
+        # this integration performs no lead lookup of its own.
+        email_address = payload.get("recipient_email")
         if not email_address:
-            raise NativeProviderError(f"No email address available for lead {lead_id}")
+            raise NativeProviderError("No email address available for recipient")
 
         result = await provider.send_email(
             recipient=email_address,
             subject=payload.get("subject") or "",
-            body=payload.get("content") or "",
+            body=payload.get("text") or "",
+            html_body=payload.get("html"),
         )
 
         if result.get("status") == "failed":

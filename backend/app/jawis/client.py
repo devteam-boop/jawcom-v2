@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from ..config.settings import get_settings
 from .schemas import (
-    LeadSchema,
+    LeadSummarySchema,
     CompanySchema,
     StageSchema,
     UserSchema,
@@ -167,15 +167,21 @@ class JawisClient:
                 raise
             raise JawisApiError(f"Unexpected error: {str(e)}")
     
-    async def get_lead(self, lead_id: str) -> Optional[LeadSchema]:
+    async def get_lead(self, lead_id: str) -> Optional[LeadSummarySchema]:
         """
         Get lead information by ID.
-        
+
+        Uses LeadSummarySchema (id/name/email/phone/city) — the lightweight
+        lead lookup used for message sending. JAWIS's lead endpoint no
+        longer returns stage_key/created_at/updated_at, so LeadSchema (which
+        requires them) is no longer usable here. If stage information is
+        needed, fetch it separately via get_stage().
+
         Args:
             lead_id: Lead ID from JAWIS
-            
+
         Returns:
-            LeadSchema if found, None otherwise
+            LeadSummarySchema if found, None otherwise
         """
         try:
             data = await self._make_request(f"/api/leads/{lead_id}")
@@ -199,14 +205,14 @@ class JawisClient:
                     lead_data.get("contact_email") if isinstance(lead_data, dict) else None,
                     lead_data.get("work_email") if isinstance(lead_data, dict) else None,
                 )
-                logger.info("TEMP DEBUG [8] object passed into LeadSchema(...): %s", lead_data)
+                logger.info("TEMP DEBUG [8] object passed into LeadSummarySchema(...): %s", lead_data)
 
             if not lead_data:
-                logger.info("TEMP DEBUG [9] LeadSchema.email after parsing: %s", None)
+                logger.info("TEMP DEBUG [9] LeadSummarySchema.email after parsing: %s", None)
                 return None
 
-            result = LeadSchema(**lead_data)
-            logger.info("TEMP DEBUG [9] LeadSchema.email after parsing: %s", result.email)
+            result = LeadSummarySchema(**lead_data)
+            logger.info("TEMP DEBUG [9] LeadSummarySchema.email after parsing: %s", result.email)
             return result
         except JawisApiError as e:
             if e.status_code == 404:

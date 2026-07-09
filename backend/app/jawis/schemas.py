@@ -25,6 +25,22 @@ class LeadSchema(BaseModel):
         }
 
 
+class LeadSummarySchema(BaseModel):
+    """Lightweight lead schema for the Communication Engine's lead lookup.
+
+    Matches JAWIS's reduced lead payload (id/name/email/phone/city only —
+    no stage_key/created_at/updated_at). Used only by JawisClient.get_lead();
+    LeadSchema (with stage_key/created_at/updated_at) is unchanged and is
+    still the type LeadContextSchema.lead expects.
+    """
+
+    id: str = Field(..., description="Lead ID from JAWIS")
+    name: str = Field(..., description="Lead name")
+    email: Optional[str] = Field(None, description="Lead email address")
+    phone: Optional[str] = Field(None, description="Lead phone number")
+    city: Optional[str] = Field(None, description="Lead city")
+
+
 class CompanySchema(BaseModel):
     """Schema for company data from JAWIS."""
     
