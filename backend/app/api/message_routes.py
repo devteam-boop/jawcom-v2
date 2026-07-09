@@ -57,6 +57,9 @@ class EmailSendResponse(BaseModel):
     status: str
     provider_message_id: Optional[str] = None
     communication_event_id: Optional[str] = None
+    error: Optional[str] = None
+    provider: Optional[str] = None
+    provider_response: Dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post(
@@ -120,6 +123,9 @@ async def send_email(
             status="failed",
             provider_message_id=None,
             communication_event_id=None,
+            error=str(exc),
+            provider="resend",
+            provider_response={},
         )
 
     provider_message_id = result.get("provider_message_id")
