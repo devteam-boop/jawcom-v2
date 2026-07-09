@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import List, Optional
 from uuid import UUID, uuid4
 
@@ -109,6 +110,87 @@ class CommunicationEventService:
                 "record_inbound_status: concurrent duplicate for provider_message_id=%s event_type=%s "
                 "— already recorded by a parallel request, treating as idempotent no-op",
                 provider_message_id, event_type,
+            )
+            return None
+
+    async def record_email_reply(
+        self,
+        gmail_message_id: str,
+        gmail_thread_id: str,
+        in_reply_to: Optional[str],
+        references: List[str],
+        subject: str,
+        body: str,
+        from_address: str,
+        received_at: Optional[datetime],
+    ) -> Optional[CommunicationEventSchema]:
+        """Record an inbound Gmail reply as a REPLIED CommunicationEvent.
+
+        Matching priority (see app/gmail_sync/service.py for the Gmail-side
+        header extraction):
+          1. In-Reply-To / References headers against a stored outbound
+             rfc822_message_id (captured at send time by message_routes.py).
+          2. Gmail threadId against a previously-matched event in the same
+             thread (handles a 2nd+ reply once the 1st has been matched).
+        A literal "provider_message_id" string match against email headers
+        is NOT implemented — Resend's internal id never appears in RFC822
+        headers a recipient's reply would carry (only the rfc822 Message-ID
+        does), so that "priority" isn't realizable and isn't faked here.
+
+        Unlike record_inbound_status(), idempotency here is NOT
+        provider_message_id+event_type (a thread can have multiple genuine
+        separate replies — see migration d2e3f4a5b6c8) — it's keyed on the
+        inbound Gmail message's own Message-ID instead.
+
+        Returns None when: this exact Gmail message was already recorded,
+        or no anchor could be matched (nothing to correlate the reply to).
+        """
+        if await self.repo.exists_replied_by_gmail_message_id(gmail_message_id):
+            return None
+
+        anchor = None
+        for candidate in [in_reply_to, *references]:
+            if not candidate:
+                continue
+            anchor = await self.repo.get_by_payload_rfc822_message_id(candidate)
+            if anchor:
+                break
+
+        if anchor is None and gmail_thread_id:
+            anchor = await self.repo.get_by_payload_gmail_thread_id(gmail_thread_id)
+
+        if anchor is None:
+            return None
+
+        try:
+            return await self.create(
+                CommunicationEventCreateSchema(
+                    running_instance_id=str(anchor.running_instance_id) if anchor.running_instance_id else None,
+                    journey_id=str(anchor.journey_id) if anchor.journey_id else None,
+                    lead_id=anchor.lead_id,
+                    node_id=anchor.node_id,
+                    event_type="replied",
+                    channel=anchor.channel,
+                    provider=anchor.provider,
+                    provider_message_id=anchor.provider_message_id,
+                    payload={
+                        "gmail_message_id": gmail_message_id,
+                        "gmail_thread_id": gmail_thread_id,
+                        "in_reply_to": in_reply_to,
+                        "references": references,
+                        "subject": subject,
+                        "body": body,
+                        "from": from_address,
+                        "received_at": received_at.isoformat() if received_at else None,
+                    },
+                )
+            )
+        except IntegrityError:
+            await self.repo.session.rollback()
+            logger.info(
+                "record_email_reply: concurrent duplicate for gmail_message_id=%s — "
+                "already recorded by a parallel sync run, treating as idempotent no-op",
+                gmail_message_id,
             )
             return None
 

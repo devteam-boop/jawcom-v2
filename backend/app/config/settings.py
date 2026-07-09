@@ -88,6 +88,24 @@ class Settings(BaseSettings):
         default=None, description="Default 'from' address for Resend (falls back to EMAIL_SENDER if unset)",
     )
 
+    # Gmail API (reply tracking — app/gmail_sync/). Existing OAuth credentials
+    # (installed refresh token, not a fresh interactive consent flow).
+    GOOGLE_CLIENT_ID: Optional[str] = Field(
+        default=None, description="Google OAuth client ID (Gmail API reply sync)",
+    )
+    GOOGLE_CLIENT_SECRET: Optional[str] = Field(
+        default=None, description="Google OAuth client secret (Gmail API reply sync)",
+    )
+    GOOGLE_REFRESH_TOKEN: Optional[str] = Field(
+        default=None, description="Google OAuth refresh token for the monitored Gmail inbox",
+    )
+    GMAIL_MONITOR_EMAIL: Optional[str] = Field(
+        default=None, description="Gmail address being monitored for inbound replies",
+    )
+    EMAIL_SYNC_WEBHOOK_TOKEN: Optional[str] = Field(
+        default=None, description="Shared secret required in X-Webhook-Token for POST /api/email-sync/run",
+    )
+
     # AI Lead Assistant (Claude API — app/services/ai_lead_assistant_service.py)
     ANTHROPIC_API_KEY: Optional[str] = Field(
         default=None, description="Anthropic API key for the AI Lead Assistant",

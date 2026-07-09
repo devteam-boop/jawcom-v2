@@ -7,6 +7,7 @@ from .flow_version import FlowVersion
 from .flow_execution_log import FlowExecutionLog
 from .template import Template, TemplateChannel, TemplateStatus
 from .communication_event import CommunicationEvent, CommunicationEventType, CommunicationEventChannel
+from .email_sync_state import EmailSyncState
 
 __all__ = [
     "Base",
@@ -25,4 +26,5 @@ __all__ = [
     "CommunicationEvent",
     "CommunicationEventType",
     "CommunicationEventChannel",
+    "EmailSyncState",
 ]

@@ -1,7 +1,7 @@
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base_repository import BaseRepository
@@ -70,6 +70,51 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
                 CommunicationEvent.provider_message_id == provider_message_id,
                 CommunicationEvent.event_type == event_type,
             )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def get_by_payload_rfc822_message_id(self, rfc822_message_id: str) -> Optional[CommunicationEvent]:
+        """Find the EMAIL_SENT anchor whose stored outbound RFC822
+        Message-ID (payload->>'rfc822_message_id', captured at send time —
+        see app/api/message_routes.py) matches an inbound reply's
+        In-Reply-To/References header. Used by app/gmail_sync/service.py's
+        reply-matching chain."""
+        result = await self.session.execute(
+            select(CommunicationEvent)
+            .where(text("payload->>'rfc822_message_id' = :mid"))
+            .params(mid=rfc822_message_id)
+            .order_by(CommunicationEvent.occurred_at.asc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_payload_gmail_thread_id(self, gmail_thread_id: str) -> Optional[CommunicationEvent]:
+        """Find any previously-recorded event (anchor or a prior reply) tied
+        to this Gmail threadId — lets later replies in an already-matched
+        thread skip Message-ID/References parsing."""
+        result = await self.session.execute(
+            select(CommunicationEvent)
+            .where(text("payload->>'gmail_thread_id' = :tid"))
+            .params(tid=gmail_thread_id)
+            .order_by(CommunicationEvent.occurred_at.asc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def exists_replied_by_gmail_message_id(self, gmail_message_id: str) -> bool:
+        """Reply-specific idempotency check — a thread can have multiple
+        genuine replies (so provider_message_id+event_type uniqueness is
+        deliberately NOT enforced for 'replied', see migration
+        d2e3f4a5b6c8), so each individual reply is de-duplicated by the
+        inbound Gmail message's own Message-ID instead."""
+        result = await self.session.execute(
+            select(CommunicationEvent.id)
+            .where(
+                CommunicationEvent.event_type == "replied",
+                text("payload->>'gmail_message_id' = :mid"),
+            )
+            .params(mid=gmail_message_id)
             .limit(1)
         )
         return result.scalar_one_or_none() is not None

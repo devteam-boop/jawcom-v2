@@ -16,6 +16,7 @@ from .ai_assistant_routes import router as ai_assistant_router
 from .ai_summary_routes import router as ai_summary_router
 from .message_routes import router as message_router
 from .debug_routes import router as debug_router
+from .email_sync_routes import router as email_sync_router
 
 __all__ = [
     "journey_router",
@@ -36,4 +37,5 @@ __all__ = [
     "ai_summary_router",
     "message_router",
     "debug_router",
+    "email_sync_router",
 ]

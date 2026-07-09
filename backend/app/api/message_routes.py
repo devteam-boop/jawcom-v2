@@ -26,6 +26,7 @@ of which caller sent the email.
 """
 
 import logging
+from html import escape as html_escape
 from typing import Any, Dict, Optional
 from uuid import UUID
 
@@ -46,6 +47,19 @@ from app.services.communication_event_service import CommunicationEventService
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/messages", tags=["Messages"])
+
+
+def _plain_text_to_html(text: str) -> str:
+    """Minimal HTML rendering of already-rendered plain-text content.
+
+    Resend (and every other provider) implements open tracking by injecting
+    a 1x1 tracking-pixel <img> into the HTML body — a text-only send has no
+    HTML for a pixel to go into, so "opened" can never fire regardless of
+    any tracking setting. This does not add templating capability (no new
+    template field, TemplateService/TemplateRenderer untouched) — it only
+    wraps the same rendered text so Resend has an HTML body to track.
+    """
+    return "<html><body>" + html_escape(text).replace("\n", "<br>\n") + "</body></html>"
 
 
 class EmailSendRequest(BaseModel):
@@ -128,7 +142,7 @@ async def send_email(
             "recipient_name": recipient_name,
             "subject": rendered["subject"],
             "text": rendered["content"],
-            "html": None,
+            "html": _plain_text_to_html(rendered["content"]),
         })
     except NativeProviderError as exc:
         logger.warning("Email send failed for lead=%s template=%s: %s", request.lead_id, request.template_key, exc)
@@ -177,6 +191,30 @@ async def send_email(
 
     provider_message_id = result.get("provider_message_id")
 
+    # ── 6b. Capture the outbound RFC822 Message-ID (Resend's POST /emails
+    #         response only returns their internal id; the RFC822 Message-ID
+    #         a reply's In-Reply-To/References will actually reference is
+    #         only exposed via a follow-up GET). Needed for Gmail reply
+    #         matching (app/gmail_sync/service.py); non-fatal on failure —
+    #         the send already succeeded, so a lookup hiccup here only
+    #         degrades this one message's reply-matching, not the send. ──
+    rfc822_message_id: Optional[str] = None
+    if provider_message_id:
+        try:
+            from app.providers import provider_registry, Channel
+            email_provider = provider_registry.get_provider(Channel.EMAIL)
+            if email_provider is not None:
+                fetched = await email_provider._fetch_email(provider_message_id)
+                rfc822_message_id = (fetched or {}).get("message_id")
+        except Exception as exc:
+            logger.warning(
+                "Could not capture rfc822_message_id for provider_message_id=%s: %s "
+                "— this message's replies won't be matchable via Message-ID/References "
+                "(threadId-cache matching may still work if another message in the same "
+                "thread succeeds)",
+                provider_message_id, exc,
+            )
+
     # ── 7. Record EMAIL_SENT for every send. Journey-originated sends
     #        (context_id set) get a real running_instance_id; manual/
     #        general sends (context_id=None) get running_instance_id=NULL —
@@ -199,6 +237,7 @@ async def send_email(
                     "template_key": request.template_key,
                     "variables": request.variables,
                     "module": request.module,
+                    "rfc822_message_id": rfc822_message_id,
                 },
             )
         )

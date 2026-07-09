@@ -17,7 +17,7 @@ schema change.
 
 import enum
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, JSON, String, UniqueConstraint, func
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, JSON, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base, BaseModel
@@ -88,9 +88,19 @@ class CommunicationEvent(Base, BaseModel):
     # rows — internal/outbound-failure events — are exempt: SQL NULLs are never
     # considered equal to each other, so this only constrains provider-sourced
     # webhook events). See migration c1d2e3f4a5b7.
+    #
+    # Excludes event_type='replied': unlike delivered/opened/bounced (which
+    # can only legitimately happen once per outbound message), a single
+    # thread can receive multiple genuine separate replies, all correlated
+    # to the same provider_message_id anchor. Reply-specific idempotency is
+    # enforced at the application level instead, keyed on the inbound
+    # Gmail message's own Message-ID (see app/gmail_sync/service.py).
+    # See migration d2e3f4a5b6c8.
     __table_args__ = (
-        UniqueConstraint(
+        Index(
+            "uq_communication_events_pmid_event_type",
             "provider_message_id", "event_type",
-            name="uq_communication_events_pmid_event_type",
+            unique=True,
+            postgresql_where=text("event_type != 'replied'"),
         ),
     )
