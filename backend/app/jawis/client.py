@@ -180,24 +180,33 @@ class JawisClient:
         try:
             data = await self._make_request(f"/api/leads/{lead_id}")
 
+            # Supports both the legacy unwrapped shape ({"lead": {...}}) and
+            # the current {"success": ..., "data": {"lead": {...}}} shape —
+            # falls back to the raw response when there's no "data" envelope.
+            payload = data.get("data", data) if isinstance(data, dict) else data
+            lead_data = payload.get("lead") if isinstance(payload, dict) else None
+
             # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
             logger.info("TEMP DEBUG [4] data.keys(): %s", list(data.keys()) if isinstance(data, dict) else type(data))
-            lead_obj = data.get("lead") if isinstance(data, dict) else None
-            logger.info("TEMP DEBUG [5] 'lead' key exists: %s", bool(lead_obj))
-            if lead_obj:
-                logger.info("TEMP DEBUG [6] lead.keys(): %s", list(lead_obj.keys()) if isinstance(lead_obj, dict) else type(lead_obj))
+            logger.info("TEMP DEBUG [5] 'lead' key exists: %s", bool(lead_data))
+            if lead_data:
+                logger.info("TEMP DEBUG [6] lead.keys(): %s", list(lead_data.keys()) if isinstance(lead_data, dict) else type(lead_data))
                 logger.info(
                     "TEMP DEBUG [7] email-like fields -> email=%r email_address=%r primary_email=%r contact_email=%r work_email=%r",
-                    lead_obj.get("email") if isinstance(lead_obj, dict) else None,
-                    lead_obj.get("email_address") if isinstance(lead_obj, dict) else None,
-                    lead_obj.get("primary_email") if isinstance(lead_obj, dict) else None,
-                    lead_obj.get("contact_email") if isinstance(lead_obj, dict) else None,
-                    lead_obj.get("work_email") if isinstance(lead_obj, dict) else None,
+                    lead_data.get("email") if isinstance(lead_data, dict) else None,
+                    lead_data.get("email_address") if isinstance(lead_data, dict) else None,
+                    lead_data.get("primary_email") if isinstance(lead_data, dict) else None,
+                    lead_data.get("contact_email") if isinstance(lead_data, dict) else None,
+                    lead_data.get("work_email") if isinstance(lead_data, dict) else None,
                 )
-                logger.info("TEMP DEBUG [8] object passed into LeadSchema(...): %s", lead_obj)
+                logger.info("TEMP DEBUG [8] object passed into LeadSchema(...): %s", lead_data)
 
-            result = LeadSchema(**data["lead"]) if data.get("lead") else None
-            logger.info("TEMP DEBUG [9] LeadSchema.email after parsing: %s", result.email if result else None)
+            if not lead_data:
+                logger.info("TEMP DEBUG [9] LeadSchema.email after parsing: %s", None)
+                return None
+
+            result = LeadSchema(**lead_data)
+            logger.info("TEMP DEBUG [9] LeadSchema.email after parsing: %s", result.email)
             return result
         except JawisApiError as e:
             if e.status_code == 404:
