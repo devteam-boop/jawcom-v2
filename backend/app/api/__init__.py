@@ -14,6 +14,7 @@ from .meta_webhook_routes import router as meta_webhook_router
 from .resend_webhook_routes import router as resend_webhook_router
 from .ai_assistant_routes import router as ai_assistant_router
 from .ai_summary_routes import router as ai_summary_router
+from .message_routes import router as message_router
 
 __all__ = [
     "journey_router",
@@ -32,4 +33,5 @@ __all__ = [
     "resend_webhook_router",
     "ai_assistant_router",
     "ai_summary_router",
+    "message_router",
 ]
