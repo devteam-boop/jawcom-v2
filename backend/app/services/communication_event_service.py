@@ -1,6 +1,8 @@
+import logging
 from typing import List, Optional
 from uuid import UUID, uuid4
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.communication_events.schemas import (
@@ -9,6 +11,8 @@ from app.communication_events.schemas import (
 )
 from app.models.communication_event import CommunicationEvent
 from app.repositories.communication_event_repository import CommunicationEventRepository
+
+logger = logging.getLogger(__name__)
 
 
 class CommunicationEventService:
@@ -73,7 +77,10 @@ class CommunicationEventService:
           - no *_sent event exists for this provider_message_id (unmatched
             inbound event — there is nothing to attach it to), or
           - this exact (provider_message_id, event_type) was already
-            recorded (idempotent — providers retry webhook delivery).
+            recorded (idempotent — providers retry webhook delivery), or
+          - a concurrent delivery of the same webhook lost the race and hit
+            the uq_communication_events_pmid_event_type DB constraint
+            (belt-and-suspenders for the check-then-insert race above).
         """
         anchor = await self.repo.get_earliest_by_provider_message_id(provider_message_id)
         if anchor is None:
@@ -82,19 +89,28 @@ class CommunicationEventService:
         if await self.repo.exists_by_provider_message_id_and_type(provider_message_id, event_type):
             return None
 
-        return await self.create(
-            CommunicationEventCreateSchema(
-                running_instance_id=str(anchor.running_instance_id) if anchor.running_instance_id else None,
-                journey_id=str(anchor.journey_id) if anchor.journey_id else None,
-                lead_id=anchor.lead_id,
-                node_id=anchor.node_id,
-                event_type=event_type,
-                channel=channel,
-                provider=provider,
-                provider_message_id=provider_message_id,
-                payload=payload or {},
+        try:
+            return await self.create(
+                CommunicationEventCreateSchema(
+                    running_instance_id=str(anchor.running_instance_id) if anchor.running_instance_id else None,
+                    journey_id=str(anchor.journey_id) if anchor.journey_id else None,
+                    lead_id=anchor.lead_id,
+                    node_id=anchor.node_id,
+                    event_type=event_type,
+                    channel=channel,
+                    provider=provider,
+                    provider_message_id=provider_message_id,
+                    payload=payload or {},
+                )
             )
-        )
+        except IntegrityError:
+            await self.repo.session.rollback()
+            logger.info(
+                "record_inbound_status: concurrent duplicate for provider_message_id=%s event_type=%s "
+                "— already recorded by a parallel request, treating as idempotent no-op",
+                provider_message_id, event_type,
+            )
+            return None
 
     def _to_schema(self, event: CommunicationEvent) -> CommunicationEventSchema:
         return CommunicationEventSchema(

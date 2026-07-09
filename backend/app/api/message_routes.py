@@ -132,11 +132,44 @@ async def send_email(
         })
     except NativeProviderError as exc:
         logger.warning("Email send failed for lead=%s template=%s: %s", request.lead_id, request.template_key, exc)
+        # Record the failure so it's visible in the lead's communication
+        # history/timeline too, not just the HTTP response — previously a
+        # send failure left no trace anywhere in communication_events.
+        # No provider_message_id exists (Resend never accepted the send),
+        # so there's nothing for a webhook to ever correlate against —
+        # this row exists purely for visibility, not for later matching.
+        failed_event_id: Optional[str] = None
+        try:
+            running_instance_id = str(UUID(request.context_id)) if request.context_id else None
+            event_service = CommunicationEventService(db)
+            failed_event = await event_service.create(
+                CommunicationEventCreateSchema(
+                    running_instance_id=running_instance_id,
+                    lead_id=request.lead_id,
+                    event_type=CommunicationEventType.FAILED.value,
+                    channel=CommunicationEventChannel.EMAIL.value,
+                    provider="resend",
+                    provider_message_id=None,
+                    payload={
+                        "template_key": request.template_key,
+                        "variables": request.variables,
+                        "module": request.module,
+                        "error": str(exc),
+                    },
+                )
+            )
+            failed_event_id = failed_event.id
+        except (ValueError, IntegrityError) as log_exc:
+            await db.rollback()
+            logger.warning(
+                "Could not record FAILED event for lead=%s context_id=%s: %s",
+                request.lead_id, request.context_id, log_exc,
+            )
         return EmailSendResponse(
             success=False,
             status="failed",
             provider_message_id=None,
-            communication_event_id=None,
+            communication_event_id=failed_event_id,
             error=str(exc),
             provider="resend",
             provider_response={},

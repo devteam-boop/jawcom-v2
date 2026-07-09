@@ -17,7 +17,7 @@ schema change.
 
 import enum
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, JSON, String, func
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, JSON, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 
 from .base import Base, BaseModel
@@ -40,8 +40,17 @@ class CommunicationEventType(str, enum.Enum):
     # so no per-channel variants (e.g. "whatsapp_delivered") were added.
     DELIVERED = "delivered"
     READ = "read"
+    CLICKED = "clicked"
     REPLIED = "replied"
+    # FAILED = the *outbound send itself* failed (e.g. Resend API error,
+    # provider misconfigured) — no provider_message_id exists yet, recorded
+    # directly by the send endpoint, not via a webhook.
     FAILED = "failed"
+    # BOUNCED/COMPLAINED = distinct webhook-sourced delivery outcomes,
+    # previously folded into FAILED; split out so a bounce/spam-complaint
+    # is distinguishable from an outbound send failure in the timeline.
+    BOUNCED = "bounced"
+    COMPLAINED = "complained"
 
 
 class CommunicationEventChannel(str, enum.Enum):
@@ -74,3 +83,14 @@ class CommunicationEvent(Base, BaseModel):
     provider_message_id = Column(String(255), nullable=True, index=True)
     payload = Column(JSON, default={})
     occurred_at = Column(DateTime, default=func.now(), nullable=False)
+
+    # Webhook retries must never create duplicate rows (NULL provider_message_id
+    # rows — internal/outbound-failure events — are exempt: SQL NULLs are never
+    # considered equal to each other, so this only constrains provider-sourced
+    # webhook events). See migration c1d2e3f4a5b7.
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_message_id", "event_type",
+            name="uq_communication_events_pmid_event_type",
+        ),
+    )
