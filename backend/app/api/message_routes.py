@@ -80,6 +80,8 @@ async def send_email(
     # ── 2/3. Fetch lead via the existing Lead Provider, resolve email ──
     lead_provider = LeadProviderFactory.get_provider()
     lead_context = await lead_provider.get_lead_context(request.lead_id)
+    # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
+    logger.info("TEMP DEBUG [11] Object received by message_routes.py before validation: %s", lead_context)
     lead = (lead_context or {}).get("lead") or {}
     if not lead:
         raise HTTPException(status_code=404, detail=f"Lead {request.lead_id} not found")

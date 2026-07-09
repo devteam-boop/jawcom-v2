@@ -137,9 +137,15 @@ class JawisClient:
         try:
             client = await self._get_client()
             response = await client.get(endpoint, params=params or {})
-            
+
+            # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
+            logger.info("TEMP DEBUG [2] %s -> HTTP status code: %s", endpoint, response.status_code)
+            logger.info("TEMP DEBUG [3] %s -> response headers: %s", endpoint, dict(response.headers))
+
             if response.status_code == 200:
                 data = response.json()
+                # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
+                logger.info("TEMP DEBUG [1] %s -> full raw JSON: %s", endpoint, data)
                 # Cache successful responses
                 self._set_cache(cache_key, data)
                 logger.debug(f"API call successful: {endpoint}")
@@ -173,7 +179,26 @@ class JawisClient:
         """
         try:
             data = await self._make_request(f"/api/leads/{lead_id}")
-            return LeadSchema(**data["lead"]) if data.get("lead") else None
+
+            # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
+            logger.info("TEMP DEBUG [4] data.keys(): %s", list(data.keys()) if isinstance(data, dict) else type(data))
+            lead_obj = data.get("lead") if isinstance(data, dict) else None
+            logger.info("TEMP DEBUG [5] 'lead' key exists: %s", bool(lead_obj))
+            if lead_obj:
+                logger.info("TEMP DEBUG [6] lead.keys(): %s", list(lead_obj.keys()) if isinstance(lead_obj, dict) else type(lead_obj))
+                logger.info(
+                    "TEMP DEBUG [7] email-like fields -> email=%r email_address=%r primary_email=%r contact_email=%r work_email=%r",
+                    lead_obj.get("email") if isinstance(lead_obj, dict) else None,
+                    lead_obj.get("email_address") if isinstance(lead_obj, dict) else None,
+                    lead_obj.get("primary_email") if isinstance(lead_obj, dict) else None,
+                    lead_obj.get("contact_email") if isinstance(lead_obj, dict) else None,
+                    lead_obj.get("work_email") if isinstance(lead_obj, dict) else None,
+                )
+                logger.info("TEMP DEBUG [8] object passed into LeadSchema(...): %s", lead_obj)
+
+            result = LeadSchema(**data["lead"]) if data.get("lead") else None
+            logger.info("TEMP DEBUG [9] LeadSchema.email after parsing: %s", result.email if result else None)
+            return result
         except JawisApiError as e:
             if e.status_code == 404:
                 return None

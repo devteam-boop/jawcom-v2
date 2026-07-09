@@ -27,12 +27,15 @@ class JawisLeadProvider(LeadProvider):
 
         if ctx is None:
             logger.warning("JAWIS lead context not found for lead_id=%s, falling back to empty context", lead_id)
-            return {
+            fallback = {
                 "lead": {"id": lead_id, "name": "Unknown", "email": None, "phone": None, "stage_key": None},
                 "company": None,
                 "owner": None,
                 "stage": None,
             }
+            # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
+            logger.info("TEMP DEBUG [10] Object returned by JawisLeadProvider.get_lead_context(): %s", fallback)
+            return fallback
 
         lead = ctx.lead
         company = ctx.company
@@ -79,4 +82,6 @@ class JawisLeadProvider(LeadProvider):
             stage.name if stage else "N/A",
         )
 
+        # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
+        logger.info("TEMP DEBUG [10] Object returned by JawisLeadProvider.get_lead_context(): %s", result)
         return result
