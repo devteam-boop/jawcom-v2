@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class CommunicationEventCreateSchema(BaseModel):
-    running_instance_id: str
+    running_instance_id: Optional[str] = None
     journey_id: Optional[str] = None
     lead_id: int
     node_id: Optional[str] = None
@@ -18,7 +18,7 @@ class CommunicationEventCreateSchema(BaseModel):
 
 class CommunicationEventSchema(BaseModel):
     id: str
-    running_instance_id: str
+    running_instance_id: Optional[str] = None
     journey_id: Optional[str] = None
     lead_id: int
     node_id: Optional[str] = None

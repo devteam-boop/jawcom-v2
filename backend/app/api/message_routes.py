@@ -12,16 +12,17 @@ Reuses existing services only:
     so this never resolves to JAWIS regardless of JAWIS_EMAIL_PROVIDER)
   - CommunicationEventService (EMAIL_SENT audit log)
 
-``CommunicationEvent.running_instance_id`` is a required (non-nullable) FK
-to ``running_journey_instances``, and that schema is not being changed.
-This endpoint serves two callers:
+``CommunicationEvent.running_instance_id`` is nullable (migration
+b4c5d6e7f8a9) so both callers below share the same table:
   - Journey-originated sends, which pass ``context_id`` = a real
-    running_instance_id -> an EMAIL_SENT event is recorded against it.
-  - Manual/general sends (``module="general"``, ``context_id=None``), which
-    have no running instance -> the email still sends, no event row is
-    written, and ``communication_event_id`` is returned as ``null``.
-This is temporary, production-compatible behavior until manual
-communication is migrated onto the unified communication timeline.
+    running_instance_id -> the EMAIL_SENT event is recorded with that id.
+  - Manual/general sends (``module="general"``, ``context_id=None``) ->
+    the EMAIL_SENT event is still recorded, with running_instance_id=NULL.
+Every send gets a communication_events row and a real
+``communication_event_id`` in the response, so ``provider_message_id`` is
+always stored and inbound Resend webhooks (delivered/opened/bounced/
+complained) can always correlate via record_inbound_status(), regardless
+of which caller sent the email.
 """
 
 import logging
@@ -143,37 +144,38 @@ async def send_email(
 
     provider_message_id = result.get("provider_message_id")
 
-    # ── 7. Record EMAIL_SENT only when a valid running_instance_id
-    #        (context_id) exists — i.e. the request originated from a
-    #        Journey. Manual/general sends (context_id=None) skip this
-    #        by design; see module docstring. ──────────────────────────
+    # ── 7. Record EMAIL_SENT for every send. Journey-originated sends
+    #        (context_id set) get a real running_instance_id; manual/
+    #        general sends (context_id=None) get running_instance_id=NULL —
+    #        both are stored in communication_events (nullable FK, see
+    #        migration b4c5d6e7f8a9) so webhooks can correlate delivered/
+    #        opened/bounced/replied against either kind. ─────────────────
     communication_event_id: Optional[str] = None
-    if request.context_id:
-        try:
-            running_instance_id = str(UUID(request.context_id))
-            event_service = CommunicationEventService(db)
-            event = await event_service.create(
-                CommunicationEventCreateSchema(
-                    running_instance_id=running_instance_id,
-                    lead_id=request.lead_id,
-                    event_type=CommunicationEventType.EMAIL_SENT.value,
-                    channel=CommunicationEventChannel.EMAIL.value,
-                    provider="resend",
-                    provider_message_id=provider_message_id,
-                    payload={
-                        "template_key": request.template_key,
-                        "variables": request.variables,
-                        "module": request.module,
-                    },
-                )
+    try:
+        running_instance_id = str(UUID(request.context_id)) if request.context_id else None
+        event_service = CommunicationEventService(db)
+        event = await event_service.create(
+            CommunicationEventCreateSchema(
+                running_instance_id=running_instance_id,
+                lead_id=request.lead_id,
+                event_type=CommunicationEventType.EMAIL_SENT.value,
+                channel=CommunicationEventChannel.EMAIL.value,
+                provider="resend",
+                provider_message_id=provider_message_id,
+                payload={
+                    "template_key": request.template_key,
+                    "variables": request.variables,
+                    "module": request.module,
+                },
             )
-            communication_event_id = event.id
-        except (ValueError, IntegrityError) as exc:
-            await db.rollback()
-            logger.warning(
-                "Could not record EMAIL_SENT for lead=%s context_id=%s: %s",
-                request.lead_id, request.context_id, exc,
-            )
+        )
+        communication_event_id = event.id
+    except (ValueError, IntegrityError) as exc:
+        await db.rollback()
+        logger.warning(
+            "Could not record EMAIL_SENT for lead=%s context_id=%s: %s",
+            request.lead_id, request.context_id, exc,
+        )
 
     # ── 8. Return ───────────────────────────────────────────────────
     return EmailSendResponse(

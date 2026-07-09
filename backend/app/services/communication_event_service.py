@@ -18,7 +18,7 @@ class CommunicationEventService:
     async def create(self, data: CommunicationEventCreateSchema) -> CommunicationEventSchema:
         event = CommunicationEvent(
             id=uuid4(),
-            running_instance_id=UUID(data.running_instance_id),
+            running_instance_id=UUID(data.running_instance_id) if data.running_instance_id else None,
             journey_id=UUID(data.journey_id) if data.journey_id else None,
             lead_id=data.lead_id,
             node_id=data.node_id,
@@ -84,7 +84,7 @@ class CommunicationEventService:
 
         return await self.create(
             CommunicationEventCreateSchema(
-                running_instance_id=str(anchor.running_instance_id),
+                running_instance_id=str(anchor.running_instance_id) if anchor.running_instance_id else None,
                 journey_id=str(anchor.journey_id) if anchor.journey_id else None,
                 lead_id=anchor.lead_id,
                 node_id=anchor.node_id,
@@ -99,7 +99,7 @@ class CommunicationEventService:
     def _to_schema(self, event: CommunicationEvent) -> CommunicationEventSchema:
         return CommunicationEventSchema(
             id=str(event.id),
-            running_instance_id=str(event.running_instance_id),
+            running_instance_id=str(event.running_instance_id) if event.running_instance_id else None,
             journey_id=str(event.journey_id) if event.journey_id else None,
             lead_id=event.lead_id,
             node_id=event.node_id,

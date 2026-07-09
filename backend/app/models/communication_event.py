@@ -53,9 +53,12 @@ class CommunicationEventChannel(str, enum.Enum):
 class CommunicationEvent(Base, BaseModel):
     __tablename__ = "communication_events"
 
+    # Nullable: NULL = manual/general send (no Journey instance); a real
+    # UUID = Journey-originated send. Manual and Journey communication share
+    # this one table — see migration b4c5d6e7f8a9.
     running_instance_id = Column(
         UUID(as_uuid=True), ForeignKey("running_journey_instances.id"),
-        nullable=False, index=True,
+        nullable=True, index=True,
     )
     journey_id = Column(
         UUID(as_uuid=True), ForeignKey("journeys.id"), nullable=True, index=True,
