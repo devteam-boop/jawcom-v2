@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import List, Optional
@@ -72,6 +73,33 @@ async def _publish_to_jawis(schema: CommunicationEventSchema) -> None:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, json=body, headers=headers)
+
+            # TEMP DIAGNOSTICS ONLY — no effect on control flow, retries, or
+            # any other behavior below. Fires purely to capture why JAWIS
+            # rejected the payload as unprocessable.
+            if response.status_code == 422:
+                redacted_headers = {
+                    k: ("Bearer ***redacted***" if k.lower() == "authorization" else v)
+                    for k, v in headers.items()
+                }
+                try:
+                    parsed_response_json = response.json()
+                except ValueError:
+                    parsed_response_json = None
+                logger.error(
+                    "JAWIS webhook 422 Unprocessable Entity — full diagnostic dump for event_id=%s "
+                    "event_type=%s\n"
+                    "  URL: %s\n"
+                    "  Headers sent: %s\n"
+                    "  Complete JSON payload sent: %s\n"
+                    "  HTTP status: %s\n"
+                    "  Full response body (raw): %s\n"
+                    "  Parsed JSON response: %s",
+                    schema.id, schema.event_type, url, redacted_headers,
+                    json.dumps(body, default=str), response.status_code,
+                    response.text, json.dumps(parsed_response_json, default=str) if parsed_response_json is not None else None,
+                )
+
             if response.status_code < 400:
                 return
             logger.warning(
