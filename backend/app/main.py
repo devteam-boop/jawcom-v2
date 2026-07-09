@@ -27,9 +27,12 @@ from app.api import (
     message_router,
     debug_router,
     email_sync_router,
+    lead_timeline_router,
+    lead_journey_router,
 )
 from app.events.dispatcher import get_dispatcher
 from app.jawis.webhook import get_webhook_handler
+from app.core.jawis_auth_middleware import JawisAuthMiddleware
 
 # Configure logging
 configure_logging()
@@ -55,6 +58,11 @@ app.add_middleware(
     allow_headers=settings.cors_allow_headers,
 )
 
+# Bearer-token auth for JAWIS-facing routes (/api/messages/*,
+# /api/communication-events, /api/leads/{lead_id}/journey/*) — see
+# app/core/jawis_auth_middleware.py.
+app.add_middleware(JawisAuthMiddleware)
+
 
 # Include Journey Engine routers
 app.include_router(journey_router)
@@ -78,6 +86,8 @@ app.include_router(ai_summary_router)
 app.include_router(message_router)
 app.include_router(debug_router)
 app.include_router(email_sync_router)
+app.include_router(lead_timeline_router)
+app.include_router(lead_journey_router)
 
 
 _scheduler = None

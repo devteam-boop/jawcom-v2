@@ -106,6 +106,20 @@ class Settings(BaseSettings):
         default=None, description="Shared secret required in X-Webhook-Token for POST /api/email-sync/run",
     )
 
+    # JAWIS <-> JawCom hybrid communication (see backend/docs, JAWIS-side
+    # COMMUNICATION_ENGINE=jawcom mode). Shared secret both directions:
+    # JAWIS sends it as Authorization: Bearer <token> when calling JawCom's
+    # /api/messages/*, /api/communication-events, /api/leads/*/journey/*;
+    # JawCom sends it the same way when publishing to JAWIS_WEBHOOK_URL.
+    JAWCOM_API_TOKEN: Optional[str] = Field(
+        default=None, description="Shared bearer token for JAWIS<->JawCom hybrid communication auth",
+    )
+    JAWIS_WEBHOOK_URL: Optional[str] = Field(
+        default=None,
+        description="JAWIS's webhook receiver — JawCom POSTs sent/delivered/opened/clicked/read/replied/failed "
+                    "communication_events here (sole JawCom->JAWIS sync mechanism)",
+    )
+
     # AI Lead Assistant (Claude API — app/services/ai_lead_assistant_service.py)
     ANTHROPIC_API_KEY: Optional[str] = Field(
         default=None, description="Anthropic API key for the AI Lead Assistant",

@@ -1,8 +1,10 @@
+import asyncio
 import logging
 from datetime import datetime
 from typing import List, Optional
 from uuid import UUID, uuid4
 
+import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,10 +12,83 @@ from app.communication_events.schemas import (
     CommunicationEventCreateSchema,
     CommunicationEventSchema,
 )
+from app.config.settings import get_settings
 from app.models.communication_event import CommunicationEvent
 from app.repositories.communication_event_repository import CommunicationEventRepository
 
 logger = logging.getLogger(__name__)
+
+# Event types that must be published to JAWIS (Decision 5) — "opened" (email)
+# and "read" (WhatsApp) are the same stored event_type ("read"), so a single
+# entry covers both without extra mapping. Deliberately excludes
+# bounced/complained/journey_started/etc. — not in the spec's listed set.
+_JAWIS_WEBHOOK_EVENT_TYPES = {
+    "email_sent", "whatsapp_sent", "delivered", "read", "clicked", "replied", "failed",
+}
+_JAWIS_WEBHOOK_RETRY_DELAYS = [1, 5, 15]  # seconds; 1 initial attempt + 3 retries
+
+
+async def _publish_to_jawis(schema: CommunicationEventSchema) -> None:
+    """Fire-and-forget POST of one communication_events row to JAWIS_WEBHOOK_URL.
+
+    Sole JawCom->JAWIS sync mechanism (Decision 5) — JAWIS pulls nothing.
+    No existing outbound-HTTP-retry infrastructure exists elsewhere in this
+    codebase (retry_service.py's retry_delays are for re-executing a failed
+    Journey node, a different concern) — this is new, minimal, in-process
+    retry/backoff, not a durable queue (would require a new dependency).
+    Runs via asyncio.create_task() so it never blocks the response to
+    whatever created the event (a Resend/Meta webhook, a manual send, a
+    Gmail reply) — those must always get a fast response regardless of
+    JAWIS's availability.
+    """
+    settings = get_settings()
+    url = settings.JAWIS_WEBHOOK_URL
+    if not url:
+        return
+
+    payload = schema.payload or {}
+    body = {
+        # Stable per-event identifier for JAWIS-side dedupe on retry.
+        "event_id": schema.id,
+        "lead_id": schema.lead_id,
+        "event_type": schema.event_type,
+        "channel": schema.channel,
+        "provider": schema.provider,
+        "provider_message_id": schema.provider_message_id,
+        "journey_id": schema.journey_id,
+        "node_id": schema.node_id,
+        "stage": payload.get("stage"),
+        "source": payload.get("source"),
+        "status": payload.get("status"),
+        "template_key": payload.get("template_key"),
+        "occurred_at": schema.occurred_at.isoformat() if schema.occurred_at else None,
+        "payload": payload,
+    }
+    headers = {"Authorization": f"Bearer {settings.JAWCOM_API_TOKEN}"} if settings.JAWCOM_API_TOKEN else {}
+
+    for attempt, delay in enumerate([0, *_JAWIS_WEBHOOK_RETRY_DELAYS]):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, json=body, headers=headers)
+            if response.status_code < 400:
+                return
+            logger.warning(
+                "JAWIS webhook publish failed (attempt %s/%s): HTTP %s for event_id=%s event_type=%s",
+                attempt + 1, len(_JAWIS_WEBHOOK_RETRY_DELAYS) + 1, response.status_code, schema.id, schema.event_type,
+            )
+        except httpx.RequestError as exc:
+            logger.warning(
+                "JAWIS webhook publish failed (attempt %s/%s): %s for event_id=%s event_type=%s",
+                attempt + 1, len(_JAWIS_WEBHOOK_RETRY_DELAYS) + 1, exc, schema.id, schema.event_type,
+            )
+
+    logger.error(
+        "JAWIS webhook publish exhausted all retries for event_id=%s event_type=%s — event is NOT lost "
+        "locally (already committed to communication_events), only JAWIS's copy is missing until a manual resync",
+        schema.id, schema.event_type,
+    )
 
 
 class CommunicationEventService:
@@ -21,6 +96,16 @@ class CommunicationEventService:
         self.repo = CommunicationEventRepository(session)
 
     async def create(self, data: CommunicationEventCreateSchema) -> CommunicationEventSchema:
+        # "source": manual | automation. Explicit callers (message_routes.py,
+        # the Communication Engine's public send APIs) always set it
+        # themselves. Callers that don't set it (Journey Engine's
+        # ExecutionEngine._record_communication_event(), untouched per
+        # scope) default to "automation" here — this tags every event
+        # without requiring any change to Execution Engine.
+        payload = dict(data.payload or {})
+        payload.setdefault("source", "automation")
+        payload.setdefault("status", data.event_type)
+
         event = CommunicationEvent(
             id=uuid4(),
             running_instance_id=UUID(data.running_instance_id) if data.running_instance_id else None,
@@ -31,10 +116,15 @@ class CommunicationEventService:
             channel=data.channel,
             provider=data.provider,
             provider_message_id=data.provider_message_id,
-            payload=data.payload or {},
+            payload=payload,
         )
         created = await self.repo.create(event)
-        return self._to_schema(created)
+        schema = self._to_schema(created)
+
+        if schema.event_type in _JAWIS_WEBHOOK_EVENT_TYPES:
+            asyncio.create_task(_publish_to_jawis(schema))
+
+        return schema
 
     async def get(self, event_id: UUID) -> CommunicationEventSchema:
         event = await self.repo.get(event_id)
@@ -49,6 +139,8 @@ class CommunicationEventService:
         lead_id: Optional[int] = None,
         event_type: Optional[str] = None,
         provider_message_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> List[CommunicationEventSchema]:
         events = await self.repo.get_all(
             skip=skip, limit=limit,
@@ -57,6 +149,8 @@ class CommunicationEventService:
             lead_id=lead_id,
             event_type=event_type,
             provider_message_id=provider_message_id,
+            channel=channel,
+            source=source,
         )
         return [self._to_schema(e) for e in events]
 
@@ -67,6 +161,7 @@ class CommunicationEventService:
         channel: str,
         provider: Optional[str] = None,
         payload: Optional[dict] = None,
+        dedup_key: Optional[str] = None,
     ) -> Optional[CommunicationEventSchema]:
         """Record a delivered/read/replied/failed event from a provider
         webhook, matched to the original *_sent event via provider_message_id.
@@ -74,11 +169,21 @@ class CommunicationEventService:
         Only ever creates a row in communication_events — no other table is
         touched, and no journey/engine logic is invoked here.
 
+        ``dedup_key``: for multi-occurrence event types (currently WhatsApp
+        'replied' — a thread can get several genuine separate replies, so
+        provider_message_id+event_type uniqueness deliberately does not
+        apply, see migration d2e3f4a5b6c8), pass the inbound message's own
+        provider-side id here instead of relying on provider_message_id+
+        event_type for idempotency. Omit for single-occurrence types
+        (delivered/read/clicked/bounced/complained/sent) — unchanged
+        behavior.
+
         Returns ``None`` (a no-op) when:
           - no *_sent event exists for this provider_message_id (unmatched
             inbound event — there is nothing to attach it to), or
-          - this exact (provider_message_id, event_type) was already
-            recorded (idempotent — providers retry webhook delivery), or
+          - this exact (provider_message_id, event_type) [or dedup_key, if
+            given] was already recorded (idempotent — providers retry
+            webhook delivery), or
           - a concurrent delivery of the same webhook lost the race and hit
             the uq_communication_events_pmid_event_type DB constraint
             (belt-and-suspenders for the check-then-insert race above).
@@ -87,8 +192,24 @@ class CommunicationEventService:
         if anchor is None:
             return None
 
-        if await self.repo.exists_by_provider_message_id_and_type(provider_message_id, event_type):
-            return None
+        if dedup_key:
+            if await self.repo.exists_by_event_type_and_dedup_key(event_type, dedup_key):
+                return None
+        else:
+            if await self.repo.exists_by_provider_message_id_and_type(provider_message_id, event_type):
+                return None
+
+        enriched_payload = dict(payload or {})
+        anchor_payload = anchor.payload or {}
+        enriched_payload.setdefault("template_key", anchor_payload.get("template_key"))
+        enriched_payload.setdefault("source", anchor_payload.get("source", "automation"))
+        enriched_payload.setdefault("status", event_type)
+        # Immutable snapshot from the anchor (Decision 1) — never re-derived
+        # or looked up here, only copied forward from whatever was written
+        # at send time.
+        enriched_payload.setdefault("stage", anchor_payload.get("stage"))
+        if dedup_key:
+            enriched_payload["dedup_key"] = dedup_key
 
         try:
             return await self.create(
@@ -101,7 +222,7 @@ class CommunicationEventService:
                     channel=channel,
                     provider=provider,
                     provider_message_id=provider_message_id,
-                    payload=payload or {},
+                    payload=enriched_payload,
                 )
             )
         except IntegrityError:
@@ -162,6 +283,7 @@ class CommunicationEventService:
         if anchor is None:
             return None
 
+        anchor_payload = anchor.payload or {}
         try:
             return await self.create(
                 CommunicationEventCreateSchema(
@@ -182,6 +304,11 @@ class CommunicationEventService:
                         "body": body,
                         "from": from_address,
                         "received_at": received_at.isoformat() if received_at else None,
+                        "template_key": anchor_payload.get("template_key"),
+                        "source": anchor_payload.get("source", "automation"),
+                        "status": "replied",
+                        # Immutable snapshot from the anchor (Decision 1).
+                        "stage": anchor_payload.get("stage"),
                     },
                 )
             )

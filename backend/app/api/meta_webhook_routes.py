@@ -26,10 +26,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/webhooks/meta", tags=["Webhooks"])
 
-# Meta's real "statuses[].status" values map almost 1:1 onto the 4 tracked
-# event types. "sent"/other values are intentionally not mapped — per
-# scope, only delivered/read/replied/failed are recorded.
+# Meta's real "statuses[].status" values. "sent" maps to WHATSAPP_SENT —
+# our own send already creates this row synchronously, so Meta's webhook
+# copy of it is almost always an idempotent no-op (same pattern as
+# Resend's "email.sent", see resend_webhook_routes.py); harmless self-heal
+# if the synchronous insert ever failed while the send still went through.
 _STATUS_MAP = {
+    "sent": CommunicationEventType.WHATSAPP_SENT.value,
     "delivered": CommunicationEventType.DELIVERED.value,
     "read": CommunicationEventType.READ.value,
     "failed": CommunicationEventType.FAILED.value,
@@ -90,6 +93,14 @@ async def receive_meta_webhook(
             # Inbound customer replies. Matched via context.id (the message
             # this is a reply to) — if Meta didn't include it, there is no
             # provider_message_id to match against, so it is skipped.
+            #
+            # dedup_key=message["id"] (WhatsApp's own message id, distinct
+            # per inbound message): a lead can send multiple genuine
+            # separate replies to the same outbound message, all sharing
+            # the same context.id — without this, only the first reply
+            # would ever be recorded (provider_message_id+event_type
+            # idempotency would silently treat every later reply as a
+            # duplicate of the first).
             for message in value.get("messages") or []:
                 context = message.get("context") or {}
                 provider_message_id = context.get("id")
@@ -104,6 +115,7 @@ async def receive_meta_webhook(
                     event_type=CommunicationEventType.REPLIED.value,
                     channel=CommunicationEventChannel.WHATSAPP.value,
                     provider="meta",
+                    dedup_key=message.get("id"),
                     payload={"raw_message": message},
                 )
                 if created:

@@ -31,6 +31,8 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
         lead_id: Optional[int] = None,
         event_type: Optional[str] = None,
         provider_message_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> List[CommunicationEvent]:
         query = select(CommunicationEvent).offset(skip).limit(limit).order_by(
             CommunicationEvent.occurred_at.asc()
@@ -45,6 +47,12 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
             query = query.where(CommunicationEvent.event_type == event_type)
         if provider_message_id:
             query = query.where(CommunicationEvent.provider_message_id == provider_message_id)
+        if channel:
+            query = query.where(CommunicationEvent.channel == channel)
+        if source:
+            # source lives in payload (see CommunicationEventService.create()),
+            # not a dedicated column — no schema change, per "no duplicate storage".
+            query = query.where(text("payload->>'source' = :source")).params(source=source)
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
@@ -101,6 +109,25 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def exists_by_event_type_and_dedup_key(self, event_type: str, dedup_key: str) -> bool:
+        """Generic reply-style idempotency check — same purpose as
+        exists_replied_by_gmail_message_id below, but channel-agnostic
+        (payload->>'dedup_key'). Used by record_inbound_status() for
+        multi-occurrence event types like WhatsApp 'replied', where
+        provider_message_id+event_type uniqueness deliberately doesn't
+        apply (see migration d2e3f4a5b6c8) since a thread can receive
+        multiple genuine separate replies."""
+        result = await self.session.execute(
+            select(CommunicationEvent.id)
+            .where(
+                CommunicationEvent.event_type == event_type,
+                text("payload->>'dedup_key' = :key"),
+            )
+            .params(key=dedup_key)
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def exists_replied_by_gmail_message_id(self, gmail_message_id: str) -> bool:
         """Reply-specific idempotency check — a thread can have multiple

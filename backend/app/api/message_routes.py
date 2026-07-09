@@ -65,6 +65,11 @@ def _plain_text_to_html(text: str) -> str:
 class EmailSendRequest(BaseModel):
     lead_id: int
     template_key: str
+    # Required: JAWIS supplies the lead's active stage at send time. JawCom
+    # never looks this up itself (no get_lead_context()/CRM call) — it's
+    # persisted into communication_events as-is and never mutated after
+    # write, regardless of later webhook status changes.
+    stage: str
     variables: Dict[str, Any] = Field(default_factory=dict)
     module: str = "general"
     context_id: Optional[str] = None
@@ -168,7 +173,10 @@ async def send_email(
                         "template_key": request.template_key,
                         "variables": request.variables,
                         "module": request.module,
+                        "stage": request.stage,
                         "error": str(exc),
+                        "source": "manual",
+                        "status": "failed",
                     },
                 )
             )
@@ -237,7 +245,10 @@ async def send_email(
                     "template_key": request.template_key,
                     "variables": request.variables,
                     "module": request.module,
+                    "stage": request.stage,
                     "rfc822_message_id": rfc822_message_id,
+                    "source": "manual",
+                    "status": result.get("status", "sent"),
                 },
             )
         )
@@ -261,6 +272,8 @@ async def send_email(
 class WhatsAppSendRequest(BaseModel):
     lead_id: int
     template_key: str
+    # Required — see EmailSendRequest.stage above; same rule.
+    stage: str
     variables: Dict[str, Any] = Field(default_factory=dict)
     module: str = "general"
     context_id: Optional[str] = None
@@ -341,46 +354,81 @@ async def send_whatsapp(
         })
     except NativeProviderError as exc:
         logger.warning("WhatsApp send failed for lead=%s template=%s: %s", request.lead_id, request.template_key, exc)
-        return WhatsAppSendResponse(
-            success=False,
-            status="failed",
-            provider_message_id=None,
-            communication_event_id=None,
-        )
-
-    provider_message_id = result.get("provider_message_id")
-
-    # ── 7. Record WHATSAPP_SENT only when a valid running_instance_id
-    #        (context_id) exists — i.e. the request originated from a
-    #        Journey. Manual/general sends (context_id=None) skip this
-    #        by design; exactly mirrors the Email API. ──────────────────
-    communication_event_id: Optional[str] = None
-    if request.context_id:
+        # Mirrors the Email API's failure recording (added for parity — this
+        # was previously silent, unlike the Email path).
+        failed_event_id: Optional[str] = None
         try:
-            running_instance_id = str(UUID(request.context_id))
+            running_instance_id = str(UUID(request.context_id)) if request.context_id else None
             event_service = CommunicationEventService(db)
-            event = await event_service.create(
+            failed_event = await event_service.create(
                 CommunicationEventCreateSchema(
                     running_instance_id=running_instance_id,
                     lead_id=request.lead_id,
-                    event_type=CommunicationEventType.WHATSAPP_SENT.value,
+                    event_type=CommunicationEventType.FAILED.value,
                     channel=CommunicationEventChannel.WHATSAPP.value,
                     provider="meta",
-                    provider_message_id=provider_message_id,
+                    provider_message_id=None,
                     payload={
                         "template_key": request.template_key,
                         "variables": request.variables,
                         "module": request.module,
+                        "stage": request.stage,
+                        "error": str(exc),
+                        "source": "manual",
+                        "status": "failed",
                     },
                 )
             )
-            communication_event_id = event.id
-        except (ValueError, IntegrityError) as exc:
+            failed_event_id = failed_event.id
+        except (ValueError, IntegrityError) as log_exc:
             await db.rollback()
             logger.warning(
-                "Could not record WHATSAPP_SENT for lead=%s context_id=%s: %s",
-                request.lead_id, request.context_id, exc,
+                "Could not record FAILED event for lead=%s context_id=%s: %s",
+                request.lead_id, request.context_id, log_exc,
             )
+        return WhatsAppSendResponse(
+            success=False,
+            status="failed",
+            provider_message_id=None,
+            communication_event_id=failed_event_id,
+        )
+
+    provider_message_id = result.get("provider_message_id")
+
+    # ── 7. Record WHATSAPP_SENT for every send (mirrors the Email API —
+    #        previously gated on context_id being set, which meant manual/
+    #        general WhatsApp sends were never recorded; fixed for parity).
+    #        Journey-originated sends (context_id set) get a real
+    #        running_instance_id; manual/general sends get NULL. ─────────
+    communication_event_id: Optional[str] = None
+    try:
+        running_instance_id = str(UUID(request.context_id)) if request.context_id else None
+        event_service = CommunicationEventService(db)
+        event = await event_service.create(
+            CommunicationEventCreateSchema(
+                running_instance_id=running_instance_id,
+                lead_id=request.lead_id,
+                event_type=CommunicationEventType.WHATSAPP_SENT.value,
+                channel=CommunicationEventChannel.WHATSAPP.value,
+                provider="meta",
+                provider_message_id=provider_message_id,
+                payload={
+                    "template_key": request.template_key,
+                    "variables": request.variables,
+                    "module": request.module,
+                    "stage": request.stage,
+                    "source": "manual",
+                    "status": result.get("status", "sent"),
+                },
+            )
+        )
+        communication_event_id = event.id
+    except (ValueError, IntegrityError) as exc:
+        await db.rollback()
+        logger.warning(
+            "Could not record WHATSAPP_SENT for lead=%s context_id=%s: %s",
+            request.lead_id, request.context_id, exc,
+        )
 
     # ── 8. Return ───────────────────────────────────────────────────
     return WhatsAppSendResponse(

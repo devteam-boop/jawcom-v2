@@ -21,8 +21,9 @@ router = APIRouter(
 
 @router.get("/", response_model=List[CommunicationEventSchema],
             summary="List communication events",
-            description="Returns paginated communication events in chronological order, "
-                        "optionally filtered by running instance, journey, lead, or event type.")
+            description="Returns paginated communication events (manual and automation "
+                        "together, in chronological order), optionally filtered by "
+                        "running instance, journey, lead, channel, source, or event type.")
 async def list_communication_events(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
@@ -30,6 +31,8 @@ async def list_communication_events(
     journey_id: Optional[UUID] = Query(None, description="Filter by journey ID"),
     lead_id: Optional[int] = Query(None, description="Filter by lead ID"),
     event_type: Optional[str] = Query(None, description="Filter by event type"),
+    channel: Optional[str] = Query(None, description="Filter by channel (email, whatsapp, system)"),
+    source: Optional[str] = Query(None, description="Filter by source (manual, automation)"),
     db: AsyncSession = Depends(get_db_session),
 ):
     service = CommunicationEventService(db)
@@ -39,6 +42,8 @@ async def list_communication_events(
         journey_id=journey_id,
         lead_id=lead_id,
         event_type=event_type,
+        channel=channel,
+        source=source,
     )
 
 
