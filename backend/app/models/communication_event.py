@@ -83,6 +83,11 @@ class CommunicationEvent(Base, BaseModel):
     provider_message_id = Column(String(255), nullable=True, index=True)
     payload = Column(JSON, default={})
     occurred_at = Column(DateTime, default=func.now(), nullable=False)
+    # Set when _publish_to_jawis (communication_event_service.py) gets a 2xx
+    # from JAWIS_WEBHOOK_URL for this row; NULL means JAWIS has no confirmed
+    # copy yet (never attempted, still retrying, or exhausted retries) — the
+    # queryable set the backfill script targets. See migration e4f5a6b7c8d9.
+    jawis_synced_at = Column(DateTime, nullable=True)
 
     # Webhook retries must never create duplicate rows (NULL provider_message_id
     # rows — internal/outbound-failure events — are exempt: SQL NULLs are never

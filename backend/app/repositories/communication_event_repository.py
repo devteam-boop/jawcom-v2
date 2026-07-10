@@ -1,7 +1,8 @@
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base_repository import BaseRepository
@@ -128,6 +129,43 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
             .limit(1)
         )
         return result.scalar_one_or_none() is not None
+
+    async def mark_jawis_synced(self, event_id: UUID, synced_at: datetime) -> None:
+        """Record that JAWIS confirmed (2xx) receipt of this event — see
+        _publish_to_jawis, communication_event_service.py."""
+        await self.session.execute(
+            update(CommunicationEvent)
+            .where(CommunicationEvent.id == event_id)
+            .values(jawis_synced_at=synced_at)
+        )
+        await self.session.commit()
+
+    async def get_unsynced(
+        self,
+        event_types: Sequence[str],
+        since: Optional[datetime] = None,
+        until: Optional[datetime] = None,
+        limit: int = 500,
+    ) -> List[CommunicationEvent]:
+        """Rows JAWIS has no confirmed copy of yet (jawis_synced_at IS NULL),
+        restricted to the event_types _publish_to_jawis actually publishes —
+        other event_types are never sent to JAWIS, so their NULL is expected,
+        not a sync failure. Used by scripts/backfill_jawis_sync.py."""
+        query = (
+            select(CommunicationEvent)
+            .where(
+                CommunicationEvent.jawis_synced_at.is_(None),
+                CommunicationEvent.event_type.in_(event_types),
+            )
+            .order_by(CommunicationEvent.occurred_at.asc())
+            .limit(limit)
+        )
+        if since:
+            query = query.where(CommunicationEvent.occurred_at >= since)
+        if until:
+            query = query.where(CommunicationEvent.occurred_at <= until)
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
 
     async def exists_replied_by_gmail_message_id(self, gmail_message_id: str) -> bool:
         """Reply-specific idempotency check — a thread can have multiple

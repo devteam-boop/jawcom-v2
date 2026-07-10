@@ -116,8 +116,9 @@ class Settings(BaseSettings):
     )
     JAWIS_WEBHOOK_URL: Optional[str] = Field(
         default=None,
-        description="JAWIS's webhook receiver — JawCom POSTs sent/delivered/opened/clicked/read/replied/failed "
-                    "communication_events here (sole JawCom->JAWIS sync mechanism)",
+        description="JAWIS's webhook receiver — JawCom POSTs email_sent/whatsapp_sent/delivered/read/clicked/"
+                    "replied/failed communication_events here (sole JawCom->JAWIS sync mechanism); event_type "
+                    "values match CommunicationEventType, not generic sent/opened labels",
     )
 
     # AI Lead Assistant (Claude API — app/services/ai_lead_assistant_service.py)

@@ -14,6 +14,7 @@ from app.communication_events.schemas import (
     CommunicationEventSchema,
 )
 from app.config.settings import get_settings
+from app.database.session import async_session_maker
 from app.models.communication_event import CommunicationEvent
 from app.repositories.communication_event_repository import CommunicationEventRepository
 
@@ -29,7 +30,7 @@ _JAWIS_WEBHOOK_EVENT_TYPES = {
 _JAWIS_WEBHOOK_RETRY_DELAYS = [1, 5, 15]  # seconds; 1 initial attempt + 3 retries
 
 
-async def _publish_to_jawis(schema: CommunicationEventSchema) -> None:
+async def _publish_to_jawis(schema: CommunicationEventSchema) -> bool:
     """Fire-and-forget POST of one communication_events row to JAWIS_WEBHOOK_URL.
 
     Sole JawCom->JAWIS sync mechanism (Decision 5) — JAWIS pulls nothing.
@@ -41,11 +42,23 @@ async def _publish_to_jawis(schema: CommunicationEventSchema) -> None:
     whatever created the event (a Resend/Meta webhook, a manual send, a
     Gmail reply) — those must always get a fast response regardless of
     JAWIS's availability.
+
+    Also reused directly (awaited, not detached) by
+    scripts/backfill_jawis_sync.py to re-publish rows where
+    jawis_synced_at IS NULL — same payload builder, same retry/backoff, no
+    separate serialization to drift out of sync. Returns True on a
+    confirmed 2xx (jawis_synced_at has been set), False otherwise.
     """
     settings = get_settings()
     url = settings.JAWIS_WEBHOOK_URL
     if not url:
-        return
+        logger.warning(
+            "JAWIS_WEBHOOK_URL not configured — skipping webhook publish for "
+            "event_id=%s event_type=%s (event remains in communication_events; "
+            "jawis_synced_at stays NULL)",
+            schema.id, schema.event_type,
+        )
+        return False
 
     payload = schema.payload or {}
     body = {
@@ -62,6 +75,18 @@ async def _publish_to_jawis(schema: CommunicationEventSchema) -> None:
         "source": payload.get("source"),
         "status": payload.get("status"),
         "template_key": payload.get("template_key"),
+        # Display fields for JAWIS's timeline cards — always at this
+        # top-level path regardless of event_type, so JAWIS never has to
+        # dig into a nested raw_event/raw_status/raw_message differently
+        # per event type. Populated at write time: for *_sent/failed by the
+        # send endpoint (app/api/message_routes.py), for delivered/read/
+        # clicked/replied/bounced/complained by forwarding from the
+        # original *_sent event's payload (see record_inbound_status /
+        # record_email_reply below) — never re-derived here.
+        "subject": payload.get("subject"),
+        "body": payload.get("body"),
+        "from": payload.get("from"),
+        "to": payload.get("to"),
         "occurred_at": schema.occurred_at.isoformat() if schema.occurred_at else None,
         "payload": payload,
     }
@@ -101,7 +126,11 @@ async def _publish_to_jawis(schema: CommunicationEventSchema) -> None:
                 )
 
             if response.status_code < 400:
-                return
+                async with async_session_maker() as session:
+                    await CommunicationEventRepository(session).mark_jawis_synced(
+                        UUID(schema.id), datetime.utcnow(),
+                    )
+                return True
             logger.warning(
                 "JAWIS webhook publish failed (attempt %s/%s): HTTP %s for event_id=%s event_type=%s",
                 attempt + 1, len(_JAWIS_WEBHOOK_RETRY_DELAYS) + 1, response.status_code, schema.id, schema.event_type,
@@ -117,6 +146,7 @@ async def _publish_to_jawis(schema: CommunicationEventSchema) -> None:
         "locally (already committed to communication_events), only JAWIS's copy is missing until a manual resync",
         schema.id, schema.event_type,
     )
+    return False
 
 
 class CommunicationEventService:
@@ -135,7 +165,7 @@ class CommunicationEventService:
         payload.setdefault("status", data.event_type)
 
         event = CommunicationEvent(
-            id=uuid4(),
+            id=UUID(data.id) if data.id else uuid4(),
             running_instance_id=UUID(data.running_instance_id) if data.running_instance_id else None,
             journey_id=UUID(data.journey_id) if data.journey_id else None,
             lead_id=data.lead_id,
@@ -236,6 +266,14 @@ class CommunicationEventService:
         # or looked up here, only copied forward from whatever was written
         # at send time.
         enriched_payload.setdefault("stage", anchor_payload.get("stage"))
+        # Display fields (subject/body/from/to) forwarded from the original
+        # *_sent event so JAWIS's timeline can render a delivered/read/
+        # clicked/bounced/complained card without needing the *_sent event
+        # too — same rationale as template_key/stage above.
+        enriched_payload.setdefault("subject", anchor_payload.get("subject"))
+        enriched_payload.setdefault("body", anchor_payload.get("body"))
+        enriched_payload.setdefault("from", anchor_payload.get("from"))
+        enriched_payload.setdefault("to", anchor_payload.get("to"))
         if dedup_key:
             enriched_payload["dedup_key"] = dedup_key
 
@@ -331,6 +369,9 @@ class CommunicationEventService:
                         "subject": subject,
                         "body": body,
                         "from": from_address,
+                        # The monitored inbox that received this reply — completes the
+                        # from/to pair for display, mirroring the *_sent events' shape.
+                        "to": get_settings().GMAIL_MONITOR_EMAIL,
                         "received_at": received_at.isoformat() if received_at else None,
                         "template_key": anchor_payload.get("template_key"),
                         "source": anchor_payload.get("source", "automation"),
@@ -364,4 +405,5 @@ class CommunicationEventService:
             occurred_at=event.occurred_at,
             created_at=event.created_at,
             updated_at=event.updated_at,
+            jawis_synced_at=event.jawis_synced_at,
         )

@@ -28,14 +28,15 @@ of which caller sent the email.
 import asyncio
 import logging
 from html import escape as html_escape
-from typing import Any, Dict, Optional
-from uuid import UUID
+from typing import Any, Dict, List, Optional
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config.settings import get_settings
 from app.core.dependencies import get_db_session
 from app.database.session import async_session_maker
 from app.templates.services import TemplateService
@@ -145,10 +146,143 @@ class EmailSendResponse(BaseModel):
     provider_response: Dict[str, Any] = Field(default_factory=dict)
 
 
+async def _send_email_and_record(
+    event_id: UUID,
+    request: "EmailSendRequest",
+    recipient_email: str,
+    recipient_name: Optional[str],
+    rendered: Dict[str, str],
+) -> None:
+    """Background task: perform the actual Resend send and record the
+    outcome, keyed on ``event_id`` already handed back to the caller in
+    send_email()'s fast 202 response.
+
+    Lead lookup and template fetch/render already happened synchronously in
+    send_email() (fast — one JAWIS callback + a local DB/Jinja2 pass, same
+    as before this change, so a bad lead_id/template_key still gets an
+    immediate 404/400). This task defers only the Resend API round-trip and
+    the resulting DB write — the piece that actually blocked the response
+    while JAWIS's client-side timeout was ticking. Uses its own DB session
+    (the request's session is gone by the time this runs), same pattern as
+    CommunicationEventService._publish_to_jawis and
+    _fetch_and_store_rfc822_message_id above.
+
+    Outcome is only ever visible via the resulting communication_event and
+    its outbound JAWIS webhook (email_sent or failed) — JAWIS is expected
+    to rely on that, not on this response, per Fix 1.
+    """
+    async with async_session_maker() as db:
+        event_service = CommunicationEventService(db)
+        running_instance_id = str(UUID(request.context_id)) if request.context_id else None
+        settings = get_settings()
+        sender_email = settings.RESEND_FROM_EMAIL or settings.EMAIL_SENDER
+
+        integration = IntegrationFactory.get("email_resend")
+        try:
+            result = await integration.execute({
+                "recipient_email": recipient_email,
+                "recipient_name": recipient_name,
+                "subject": rendered["subject"],
+                "text": rendered["content"],
+                "html": _plain_text_to_html(rendered["content"]),
+            })
+        except NativeProviderError as exc:
+            logger.warning(
+                "Email send failed for lead=%s template=%s: %s",
+                request.lead_id, request.template_key, exc,
+            )
+            # Record the failure so it's visible in the lead's communication
+            # history/timeline too, not just discarded — previously a send
+            # failure left no trace anywhere in communication_events. No
+            # provider_message_id exists (Resend never accepted the send),
+            # so there's nothing for a webhook to ever correlate against —
+            # this row exists purely for visibility, not for later matching.
+            try:
+                await event_service.create(
+                    CommunicationEventCreateSchema(
+                        id=str(event_id),
+                        running_instance_id=running_instance_id,
+                        lead_id=request.lead_id,
+                        event_type=CommunicationEventType.FAILED.value,
+                        channel=CommunicationEventChannel.EMAIL.value,
+                        provider="resend",
+                        provider_message_id=None,
+                        payload={
+                            "template_key": request.template_key,
+                            "variables": request.variables,
+                            "module": request.module,
+                            "stage": request.stage,
+                            "error": str(exc),
+                            "source": "manual",
+                            "status": "failed",
+                            "subject": rendered["subject"],
+                            "body": rendered["content"],
+                            "from": sender_email,
+                            "to": recipient_email,
+                        },
+                    )
+                )
+            except (ValueError, IntegrityError) as log_exc:
+                await db.rollback()
+                logger.warning(
+                    "Could not record FAILED event for lead=%s context_id=%s event_id=%s: %s",
+                    request.lead_id, request.context_id, event_id, log_exc,
+                )
+            return
+
+        provider_message_id = result.get("provider_message_id")
+
+        # Record EMAIL_SENT. Journey-originated sends (context_id set) get a
+        # real running_instance_id; manual/general sends (context_id=None)
+        # get running_instance_id=NULL — both are stored in
+        # communication_events (nullable FK, see migration b4c5d6e7f8a9) so
+        # webhooks can correlate delivered/opened/bounced/replied against
+        # either kind. The RFC822 Message-ID (needed for Gmail reply
+        # matching) is NOT fetched here — Resend's POST response only
+        # returns their internal id; the RFC822 id is only available via a
+        # follow-up GET, fired as its own background task below.
+        try:
+            event = await event_service.create(
+                CommunicationEventCreateSchema(
+                    id=str(event_id),
+                    running_instance_id=running_instance_id,
+                    lead_id=request.lead_id,
+                    event_type=CommunicationEventType.EMAIL_SENT.value,
+                    channel=CommunicationEventChannel.EMAIL.value,
+                    provider="resend",
+                    provider_message_id=provider_message_id,
+                    payload={
+                        "template_key": request.template_key,
+                        "variables": request.variables,
+                        "module": request.module,
+                        "stage": request.stage,
+                        "rfc822_message_id": None,
+                        "source": "manual",
+                        "status": result.get("status", "sent"),
+                        "subject": rendered["subject"],
+                        "body": rendered["content"],
+                        "from": sender_email,
+                        "to": recipient_email,
+                    },
+                )
+            )
+            if provider_message_id:
+                asyncio.create_task(
+                    _fetch_and_store_rfc822_message_id(event.id, provider_message_id)
+                )
+        except (ValueError, IntegrityError) as exc:
+            await db.rollback()
+            logger.warning(
+                "Could not record EMAIL_SENT for lead=%s context_id=%s event_id=%s: %s",
+                request.lead_id, request.context_id, event_id, exc,
+            )
+
+
 @router.post(
     "/email/send",
     response_model=EmailSendResponse,
-    summary="Send a production email via the existing Resend integration",
+    status_code=202,
+    summary="Accept a production email send via the existing Resend integration (async)",
 )
 async def send_email(
     request: EmailSendRequest,
@@ -167,7 +301,11 @@ async def send_email(
     # ── 2/3. Fetch lead via the lightweight JAWIS lead lookup (get_lead(),
     #        NOT get_lead_context() — manual sends need only name/email/
     #        phone, not stage/company/owner, and get_lead_context() requires
-    #        stage_key, which this lightweight endpoint doesn't return) ──
+    #        stage_key, which this lightweight endpoint doesn't return).
+    #        Stays synchronous — this is fast local-ish request validation,
+    #        not the slow external round-trip JAWIS's timeout was hitting
+    #        (see _send_email_and_record above), so bad input still gets an
+    #        immediate 404/400 instead of a silent async failure. ────────
     jawis_client = get_jawis_client()
     lead = await jawis_client.get_lead(str(request.lead_id))
     if not lead:
@@ -183,7 +321,8 @@ async def send_email(
     #        email: subject/body come directly from variables.subject /
     #        variables.body, used as-is (no template to look up, nothing
     #        to validate against a channel, no Jinja2 pass — this already
-    #        *is* the final content, not a template containing it). ──────
+    #        *is* the final content, not a template containing it). Stays
+    #        synchronous for the same reason as 2/3 above. ──────────────
     if template_uuid is not None:
         template_service = TemplateService(db)
         try:
@@ -209,122 +348,31 @@ async def send_email(
             "content": request.variables.get("body", ""),
         }
 
-    # ── 6. Send via the existing Resend integration (never JAWIS). The
-    #        recipient was already resolved once in step 2/3 above — passed
-    #        in directly so the integration performs no lead lookup of its
-    #        own (no second JAWIS call). ──────────────────────────────────
-    integration = IntegrationFactory.get("email_resend")
-    try:
-        result = await integration.execute({
-            "recipient_email": recipient_email,
-            "recipient_name": recipient_name,
-            "subject": rendered["subject"],
-            "text": rendered["content"],
-            "html": _plain_text_to_html(rendered["content"]),
-        })
-    except NativeProviderError as exc:
-        logger.warning("Email send failed for lead=%s template=%s: %s", request.lead_id, request.template_key, exc)
-        # Record the failure so it's visible in the lead's communication
-        # history/timeline too, not just the HTTP response — previously a
-        # send failure left no trace anywhere in communication_events.
-        # No provider_message_id exists (Resend never accepted the send),
-        # so there's nothing for a webhook to ever correlate against —
-        # this row exists purely for visibility, not for later matching.
-        failed_event_id: Optional[str] = None
-        try:
-            running_instance_id = str(UUID(request.context_id)) if request.context_id else None
-            event_service = CommunicationEventService(db)
-            failed_event = await event_service.create(
-                CommunicationEventCreateSchema(
-                    running_instance_id=running_instance_id,
-                    lead_id=request.lead_id,
-                    event_type=CommunicationEventType.FAILED.value,
-                    channel=CommunicationEventChannel.EMAIL.value,
-                    provider="resend",
-                    provider_message_id=None,
-                    payload={
-                        "template_key": request.template_key,
-                        "variables": request.variables,
-                        "module": request.module,
-                        "stage": request.stage,
-                        "error": str(exc),
-                        "source": "manual",
-                        "status": "failed",
-                    },
-                )
-            )
-            failed_event_id = failed_event.id
-        except (ValueError, IntegrityError) as log_exc:
-            await db.rollback()
-            logger.warning(
-                "Could not record FAILED event for lead=%s context_id=%s: %s",
-                request.lead_id, request.context_id, log_exc,
-            )
-        return EmailSendResponse(
-            success=False,
-            status="failed",
-            provider_message_id=None,
-            communication_event_id=failed_event_id,
-            error=str(exc),
-            provider="resend",
-            provider_response={},
-        )
+    # ── 6/7. Fast-ack (Fix 1): hand back a stable, pre-generated event_id
+    #        immediately and defer the actual Resend call + resulting DB
+    #        write to a background task — see _send_email_and_record above.
+    #        JAWIS is expected to rely on the outbound webhook
+    #        (email_sent/failed) for the real outcome, not this response.
+    #        NOTE: this does not eliminate a Render free-tier cold-start
+    #        spin-up ahead of this handler (that's platform-level, before
+    #        any application code runs) — it only removes this handler's
+    #        own contribution (the Resend round-trip) from the request's
+    #        total latency. See report for the keep-warm/paid-tier
+    #        recommendation, which is the actual fix for cold start itself.
+    event_id = uuid4()
+    asyncio.create_task(
+        _send_email_and_record(event_id, request, recipient_email, recipient_name, rendered)
+    )
 
-    provider_message_id = result.get("provider_message_id")
-
-    # ── 7. Record EMAIL_SENT for every send. Journey-originated sends
-    #        (context_id set) get a real running_instance_id; manual/
-    #        general sends (context_id=None) get running_instance_id=NULL —
-    #        both are stored in communication_events (nullable FK, see
-    #        migration b4c5d6e7f8a9) so webhooks can correlate delivered/
-    #        opened/bounced/replied against either kind. The RFC822
-    #        Message-ID (needed for Gmail reply matching) is NOT fetched
-    #        here — Resend's POST response only returns their internal id;
-    #        the RFC822 id is only available via a follow-up GET, which
-    #        used to be awaited inline (up to a 15s ceiling) and is now a
-    #        background task fired after this event exists, so the
-    #        response returns immediately after the DB write. ────────────
-    communication_event_id: Optional[str] = None
-    try:
-        running_instance_id = str(UUID(request.context_id)) if request.context_id else None
-        event_service = CommunicationEventService(db)
-        event = await event_service.create(
-            CommunicationEventCreateSchema(
-                running_instance_id=running_instance_id,
-                lead_id=request.lead_id,
-                event_type=CommunicationEventType.EMAIL_SENT.value,
-                channel=CommunicationEventChannel.EMAIL.value,
-                provider="resend",
-                provider_message_id=provider_message_id,
-                payload={
-                    "template_key": request.template_key,
-                    "variables": request.variables,
-                    "module": request.module,
-                    "stage": request.stage,
-                    "rfc822_message_id": None,
-                    "source": "manual",
-                    "status": result.get("status", "sent"),
-                },
-            )
-        )
-        communication_event_id = event.id
-        if provider_message_id:
-            asyncio.create_task(
-                _fetch_and_store_rfc822_message_id(event.id, provider_message_id)
-            )
-    except (ValueError, IntegrityError) as exc:
-        await db.rollback()
-        logger.warning(
-            "Could not record EMAIL_SENT for lead=%s context_id=%s: %s",
-            request.lead_id, request.context_id, exc,
-        )
-
-    # ── 8. Return ───────────────────────────────────────────────────
+    # ── 8. Return fast. `success`/`status` now mean "accepted for
+    #        processing", not "delivered" — delivery outcome follows via
+    #        the communication_event + webhook created in the background
+    #        task above. ─────────────────────────────────────────────────
     return EmailSendResponse(
         success=True,
-        status=result.get("status", "sent"),
-        provider_message_id=provider_message_id,
-        communication_event_id=communication_event_id,
+        status="queued",
+        provider_message_id=None,
+        communication_event_id=str(event_id),
     )
 
 
@@ -345,10 +393,110 @@ class WhatsAppSendResponse(BaseModel):
     communication_event_id: Optional[str] = None
 
 
+async def _send_whatsapp_and_record(
+    event_id: UUID,
+    request: "WhatsAppSendRequest",
+    recipient_phone: str,
+    recipient_name: Optional[str],
+    template_name: str,
+    rendered_body: str,
+) -> None:
+    """Background task: perform the actual Meta send and record the
+    outcome — mirrors _send_email_and_record above; see send_whatsapp()
+    for what stays synchronous vs. deferred here."""
+    async with async_session_maker() as db:
+        event_service = CommunicationEventService(db)
+        running_instance_id = str(UUID(request.context_id)) if request.context_id else None
+        settings = get_settings()
+        # Meta's Graph API only exposes an opaque phone_number_id here (see
+        # app/providers/meta/meta_provider.py) — there is no separate
+        # human-readable "display phone number" setting in this codebase,
+        # so that id is the best available sender identity for display.
+        sender = settings.WHATSAPP_PHONE_NUMBER_ID
+
+        integration = IntegrationFactory.get("whatsapp_meta")
+        try:
+            result = await integration.execute({
+                "recipient_phone": recipient_phone,
+                "recipient_name": recipient_name,
+                "template_name": template_name,
+                "variables": request.variables,
+            })
+        except NativeProviderError as exc:
+            logger.warning(
+                "WhatsApp send failed for lead=%s template=%s: %s",
+                request.lead_id, request.template_key, exc,
+            )
+            try:
+                await event_service.create(
+                    CommunicationEventCreateSchema(
+                        id=str(event_id),
+                        running_instance_id=running_instance_id,
+                        lead_id=request.lead_id,
+                        event_type=CommunicationEventType.FAILED.value,
+                        channel=CommunicationEventChannel.WHATSAPP.value,
+                        provider="meta",
+                        provider_message_id=None,
+                        payload={
+                            "template_key": request.template_key,
+                            "variables": request.variables,
+                            "module": request.module,
+                            "stage": request.stage,
+                            "error": str(exc),
+                            "source": "manual",
+                            "status": "failed",
+                            "body": rendered_body,
+                            "from": sender,
+                            "to": recipient_phone,
+                        },
+                    )
+                )
+            except (ValueError, IntegrityError) as log_exc:
+                await db.rollback()
+                logger.warning(
+                    "Could not record FAILED event for lead=%s context_id=%s event_id=%s: %s",
+                    request.lead_id, request.context_id, event_id, log_exc,
+                )
+            return
+
+        provider_message_id = result.get("provider_message_id")
+
+        try:
+            await event_service.create(
+                CommunicationEventCreateSchema(
+                    id=str(event_id),
+                    running_instance_id=running_instance_id,
+                    lead_id=request.lead_id,
+                    event_type=CommunicationEventType.WHATSAPP_SENT.value,
+                    channel=CommunicationEventChannel.WHATSAPP.value,
+                    provider="meta",
+                    provider_message_id=provider_message_id,
+                    payload={
+                        "template_key": request.template_key,
+                        "variables": request.variables,
+                        "module": request.module,
+                        "stage": request.stage,
+                        "source": "manual",
+                        "status": result.get("status", "sent"),
+                        "body": rendered_body,
+                        "from": sender,
+                        "to": recipient_phone,
+                    },
+                )
+            )
+        except (ValueError, IntegrityError) as exc:
+            await db.rollback()
+            logger.warning(
+                "Could not record WHATSAPP_SENT for lead=%s context_id=%s event_id=%s: %s",
+                request.lead_id, request.context_id, event_id, exc,
+            )
+
+
 @router.post(
     "/whatsapp/send",
     response_model=WhatsAppSendResponse,
-    summary="Send a production WhatsApp message via the existing Meta integration",
+    status_code=202,
+    summary="Accept a production WhatsApp message send via the existing Meta integration (async)",
 )
 async def send_whatsapp(
     request: WhatsAppSendRequest,
@@ -363,7 +511,8 @@ async def send_whatsapp(
     # ── 2/3. Fetch lead via the lightweight JAWIS lead lookup (get_lead(),
     #        NOT get_lead_context() — manual sends need only name/email/
     #        phone, not stage/company/owner, and get_lead_context() requires
-    #        stage_key, which this lightweight endpoint doesn't return) ──
+    #        stage_key, which this lightweight endpoint doesn't return).
+    #        Stays synchronous — see send_email()'s equivalent comment. ──
     jawis_client = get_jawis_client()
     lead = await jawis_client.get_lead(str(request.lead_id))
     if not lead:
@@ -374,7 +523,9 @@ async def send_whatsapp(
     if not recipient_phone:
         raise HTTPException(status_code=400, detail=f"Lead {request.lead_id} has no phone number on file")
 
-    # ── 4/5. Fetch + render template via the existing TemplateService ──
+    # ── 4/5. Fetch + render template via the existing TemplateService.
+    #        Stays synchronous — local DB + Jinja2, not the external Meta
+    #        round-trip being deferred below. ──────────────────────────
     template_service = TemplateService(db)
     try:
         template = await template_service.get_template(template_uuid)
@@ -394,105 +545,84 @@ async def send_whatsapp(
         # WhatsApp Business API only accepts approved templates addressed
         # by name with positional parameters (see below), the same
         # contract SendWhatsAppExecutor already uses — this call exists to
-        # validate the variables against the template before sending.
-        template_service.renderer.render_whatsapp(template.content, request.variables)
+        # validate the variables against the template before sending. The
+        # rendered text is still kept (not discarded) as the best available
+        # display body for the timeline/webhook (Fix 4) even though Meta
+        # itself renders the approved template server-side.
+        rendered_body = template_service.renderer.render_whatsapp(template.content, request.variables)
     except TemplateValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # ── 6. Send via the existing Meta integration (never JAWIS). The
-    #        recipient was already resolved once in step 2/3 above — passed
-    #        in directly so the integration performs no lead lookup of its
-    #        own (no second JAWIS call). ──────────────────────────────────
-    integration = IntegrationFactory.get("whatsapp_meta")
-    try:
-        result = await integration.execute({
-            "recipient_phone": recipient_phone,
-            "recipient_name": recipient_name,
-            "template_name": template.name,
-            "variables": request.variables,
-        })
-    except NativeProviderError as exc:
-        logger.warning("WhatsApp send failed for lead=%s template=%s: %s", request.lead_id, request.template_key, exc)
-        # Mirrors the Email API's failure recording (added for parity — this
-        # was previously silent, unlike the Email path).
-        failed_event_id: Optional[str] = None
-        try:
-            running_instance_id = str(UUID(request.context_id)) if request.context_id else None
-            event_service = CommunicationEventService(db)
-            failed_event = await event_service.create(
-                CommunicationEventCreateSchema(
-                    running_instance_id=running_instance_id,
-                    lead_id=request.lead_id,
-                    event_type=CommunicationEventType.FAILED.value,
-                    channel=CommunicationEventChannel.WHATSAPP.value,
-                    provider="meta",
-                    provider_message_id=None,
-                    payload={
-                        "template_key": request.template_key,
-                        "variables": request.variables,
-                        "module": request.module,
-                        "stage": request.stage,
-                        "error": str(exc),
-                        "source": "manual",
-                        "status": "failed",
-                    },
-                )
-            )
-            failed_event_id = failed_event.id
-        except (ValueError, IntegrityError) as log_exc:
-            await db.rollback()
-            logger.warning(
-                "Could not record FAILED event for lead=%s context_id=%s: %s",
-                request.lead_id, request.context_id, log_exc,
-            )
-        return WhatsAppSendResponse(
-            success=False,
-            status="failed",
-            provider_message_id=None,
-            communication_event_id=failed_event_id,
+    # ── 6/7. Fast-ack (Fix 1): defer the actual Meta call + resulting DB
+    #        write to a background task — see _send_whatsapp_and_record
+    #        above and send_email()'s equivalent comment for the full
+    #        rationale (including the cold-start caveat). ───────────────
+    event_id = uuid4()
+    asyncio.create_task(
+        _send_whatsapp_and_record(
+            event_id, request, recipient_phone, recipient_name, template.name, rendered_body,
         )
+    )
 
-    provider_message_id = result.get("provider_message_id")
-
-    # ── 7. Record WHATSAPP_SENT for every send (mirrors the Email API —
-    #        previously gated on context_id being set, which meant manual/
-    #        general WhatsApp sends were never recorded; fixed for parity).
-    #        Journey-originated sends (context_id set) get a real
-    #        running_instance_id; manual/general sends get NULL. ─────────
-    communication_event_id: Optional[str] = None
-    try:
-        running_instance_id = str(UUID(request.context_id)) if request.context_id else None
-        event_service = CommunicationEventService(db)
-        event = await event_service.create(
-            CommunicationEventCreateSchema(
-                running_instance_id=running_instance_id,
-                lead_id=request.lead_id,
-                event_type=CommunicationEventType.WHATSAPP_SENT.value,
-                channel=CommunicationEventChannel.WHATSAPP.value,
-                provider="meta",
-                provider_message_id=provider_message_id,
-                payload={
-                    "template_key": request.template_key,
-                    "variables": request.variables,
-                    "module": request.module,
-                    "stage": request.stage,
-                    "source": "manual",
-                    "status": result.get("status", "sent"),
-                },
-            )
-        )
-        communication_event_id = event.id
-    except (ValueError, IntegrityError) as exc:
-        await db.rollback()
-        logger.warning(
-            "Could not record WHATSAPP_SENT for lead=%s context_id=%s: %s",
-            request.lead_id, request.context_id, exc,
-        )
-
-    # ── 8. Return ───────────────────────────────────────────────────
+    # ── 8. Return fast — see send_email()'s equivalent comment on what
+    #        success/status now mean. ───────────────────────────────────
     return WhatsAppSendResponse(
         success=True,
-        status=result.get("status", "sent"),
-        provider_message_id=provider_message_id,
-        communication_event_id=communication_event_id,
+        status="queued",
+        provider_message_id=None,
+        communication_event_id=str(event_id),
     )
+
+
+class JawisTemplateSchema(BaseModel):
+    id: str
+    key: str  # same value as id — templates.template_key elsewhere in this API IS the template's id
+    name: str
+    channel: str
+    status: str
+    subject: Optional[str] = None
+    body: str
+    variables: List[str] = Field(default_factory=list)
+
+
+@router.get(
+    "/templates",
+    response_model=List[JawisTemplateSchema],
+    summary="List templates for JAWIS's template picker (read-only, reuses the Template Engine)",
+)
+async def list_templates_for_jawis(
+    channel: Optional[str] = None,
+    status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Fix 3 — thin read wrapper around the existing Template Engine
+    (app/templates/services.py TemplateService), mounted under /api/messages
+    (not /api/templates) deliberately: /api/templates already exists as
+    JawCom's own unauthenticated CRUD API used by the frontend template
+    editor (see app/api/template_routes.py, frontend/src/services/
+    templates.js) — Bearer-protecting that path or reusing it here would
+    either break the frontend or require duplicating the CRUD router.
+    Mounting under /api/messages instead means this endpoint automatically
+    inherits the existing Bearer JAWCOM_API_TOKEN protection already applied
+    to that whole prefix (see app/core/jawis_auth_middleware.py) with no
+    middleware change needed.
+
+    No template storage or rendering logic is duplicated: list_templates()
+    and the renderer's variable extraction are both the same TemplateService
+    instances used by send_email/send_whatsapp above.
+    """
+    template_service = TemplateService(db)
+    templates = await template_service.list_templates(channel=channel, status=status)
+    return [
+        JawisTemplateSchema(
+            id=t.id,
+            key=t.id,
+            name=t.name,
+            channel=t.channel,
+            status=t.status,
+            subject=t.subject,
+            body=t.content,
+            variables=template_service.renderer._extract_variables(t.content),
+        )
+        for t in templates
+    ]
