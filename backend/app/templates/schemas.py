@@ -7,11 +7,22 @@ class TemplateSchema(BaseModel):
     id: str = Field(..., description="Template ID")
     name: str = Field(..., description="Template name")
     channel: str = Field(..., description="Template channel (email|sms|whatsapp|push)")
-    status: str = Field(..., description="Template status (draft|active|inactive)")
+    status: str = Field(..., description="Template status (draft|active|inactive, or Meta's APPROVED/PENDING/... for channel=whatsapp)")
     subject: Optional[str] = Field(None, description="Template subject (for email)")
     content: str = Field(..., description="Template body with {{variable}} placeholders")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
+    # WhatsApp Template Management (Phase 1) additions — always None/empty
+    # for non-whatsapp / non-Meta-synced templates, so existing consumers
+    # of this schema are unaffected. Populated only when this row actually
+    # came from WhatsAppTemplateService (see app/api/template_routes.py).
+    provider_template_id: Optional[str] = Field(None, description="Meta's template id (WhatsApp only)")
+    language: Optional[str] = Field(None, description="Template language, e.g. en_US (WhatsApp only)")
+    category: Optional[str] = Field(None, description="Meta template category (WhatsApp only)")
+    header_type: Optional[str] = Field(None, description="Header component type, e.g. TEXT/IMAGE (WhatsApp only)")
+    footer: Optional[str] = Field(None, description="Footer component text (WhatsApp only)")
+    buttons: List[Dict[str, Any]] = Field(default_factory=list, description="Buttons component (WhatsApp only)")
+    variables: List[str] = Field(default_factory=list, description="Variable placeholders found in content (WhatsApp only)")
 
     class Config:
         from_attributes = True

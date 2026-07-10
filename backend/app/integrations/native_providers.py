@@ -77,7 +77,11 @@ class MetaWhatsAppIntegration(BaseIntegration):
         result = await provider.send_template_message(
             recipient=phone.lstrip("+"),
             template_name=payload.get("template_name") or "",
-            template_language="en_US",
+            # Optional — absent for every existing caller (Journey Engine's
+            # send_whatsapp_executor.py never sets this key), so this stays
+            # "en_US" exactly as before unless a caller opts in (WhatsApp
+            # Template Management Phase 1, Feature 5).
+            template_language=payload.get("language") or "en_US",
             template_parameters=list(variables.values()) if variables else None,
         )
 

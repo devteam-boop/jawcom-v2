@@ -222,6 +222,37 @@ class MetaProvider(WhatsAppProvider):
             return "UNKNOWN"
         return results[0].get("status", "UNKNOWN")
 
+    async def list_templates(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Fetch every message template configured for this Business Account
+        (any status — PENDING/APPROVED/REJECTED/PAUSED/DISABLED — approval
+        state changes over time so all of them need to be visible to a
+        sync, not just the currently-approved ones), following Graph API's
+        cursor pagination (``paging.next``) until exhausted.
+
+        Used by WhatsAppTemplateService.sync_from_meta() (WhatsApp Template
+        Management, Phase 1) — not used by message sending, and not wired
+        into IntegrationFactory/BaseIntegration (same "provider
+        implementation only" scope as the rest of this class).
+        """
+        if not self.business_account_id:
+            raise RuntimeError("MetaProvider not configured (missing business_account_id)")
+
+        url = f"{self.GRAPH_BASE_URL}/{self.api_version}/{self.business_account_id}/message_templates"
+        params: Optional[Dict[str, Any]] = {"limit": limit}
+        templates: List[Dict[str, Any]] = []
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while url:
+                response = await client.get(url, headers=self._headers(), params=params)
+                if response.status_code >= 400:
+                    raise RuntimeError(f"Meta API error {response.status_code}: {response.text}")
+                data = response.json()
+                templates.extend(data.get("data") or [])
+                url = (data.get("paging") or {}).get("next")
+                params = None  # the 'next' URL already carries every query param
+
+        return templates
+
     async def upload_media(self, media_url: str, media_type: str) -> str:
         """Download media from ``media_url`` and upload it to Meta, returning the media ID.
 

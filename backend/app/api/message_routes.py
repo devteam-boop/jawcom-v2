@@ -47,6 +47,7 @@ from app.communication_events.schemas import CommunicationEventCreateSchema
 from app.models.communication_event import CommunicationEventType, CommunicationEventChannel
 from app.repositories.communication_event_repository import CommunicationEventRepository
 from app.services.communication_event_service import CommunicationEventService
+from app.whatsapp_templates.service import WhatsAppTemplateService
 
 logger = logging.getLogger(__name__)
 
@@ -378,7 +379,17 @@ async def send_email(
 
 class WhatsAppSendRequest(BaseModel):
     lead_id: int
-    template_key: str
+    # Legacy path — a JawCom Template row's id (generic templates table).
+    # Optional now (was required) so existing callers are unaffected while
+    # template_name (below) becomes an alternative way to address a
+    # Meta-synced template (WhatsApp Template Management Phase 1, Feature 5).
+    # Exactly one of template_key/template_name must be supplied.
+    template_key: Optional[str] = None
+    # New path — a Meta WhatsApp template's own name (whatsapp_templates
+    # table, populated only by Meta Sync — see app/whatsapp_templates/).
+    # Takes precedence over template_key when both are given.
+    template_name: Optional[str] = None
+    language: str = "en_US"
     # Required — see EmailSendRequest.stage above; same rule.
     stage: str
     variables: Dict[str, Any] = Field(default_factory=dict)
@@ -398,12 +409,21 @@ async def _send_whatsapp_and_record(
     request: "WhatsAppSendRequest",
     recipient_phone: str,
     recipient_name: Optional[str],
-    template_name: str,
+    resolved_template_name: str,
+    language: str,
     rendered_body: str,
 ) -> None:
     """Background task: perform the actual Meta send and record the
     outcome — mirrors _send_email_and_record above; see send_whatsapp()
-    for what stays synchronous vs. deferred here."""
+    for what stays synchronous vs. deferred here.
+
+    ``resolved_template_name``/``language`` are what Meta actually sends
+    against, regardless of whether the caller addressed the template via
+    the new template_name path or the legacy template_key path (WhatsApp
+    Template Management Phase 1, Feature 5) — always stored verbatim in the
+    resulting communication_event's payload (Feature 7: "Store
+    template_name in communication_events. Do not infer later.").
+    """
     async with async_session_maker() as db:
         event_service = CommunicationEventService(db)
         running_instance_id = str(UUID(request.context_id)) if request.context_id else None
@@ -419,13 +439,14 @@ async def _send_whatsapp_and_record(
             result = await integration.execute({
                 "recipient_phone": recipient_phone,
                 "recipient_name": recipient_name,
-                "template_name": template_name,
+                "template_name": resolved_template_name,
+                "language": language,
                 "variables": request.variables,
             })
         except NativeProviderError as exc:
             logger.warning(
                 "WhatsApp send failed for lead=%s template=%s: %s",
-                request.lead_id, request.template_key, exc,
+                request.lead_id, resolved_template_name, exc,
             )
             try:
                 await event_service.create(
@@ -439,6 +460,8 @@ async def _send_whatsapp_and_record(
                         provider_message_id=None,
                         payload={
                             "template_key": request.template_key,
+                            "template_name": resolved_template_name,
+                            "language": language,
                             "variables": request.variables,
                             "module": request.module,
                             "stage": request.stage,
@@ -473,6 +496,8 @@ async def _send_whatsapp_and_record(
                     provider_message_id=provider_message_id,
                     payload={
                         "template_key": request.template_key,
+                        "template_name": resolved_template_name,
+                        "language": language,
                         "variables": request.variables,
                         "module": request.module,
                         "stage": request.stage,
@@ -502,11 +527,19 @@ async def send_whatsapp(
     request: WhatsAppSendRequest,
     db: AsyncSession = Depends(get_db_session),
 ):
-    # ── 1. Validate request ────────────────────────────────────────
-    try:
-        template_uuid = UUID(request.template_key)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid template_key: {request.template_key!r}")
+    # ── 1. Validate request. Exactly one of template_name (new — Meta-synced
+    #        whatsapp_templates, Phase 1 Feature 5) / template_key (legacy —
+    #        generic templates table) must be supplied; template_name wins
+    #        if both are. ──────────────────────────────────────────────────
+    if not request.template_name and not request.template_key:
+        raise HTTPException(status_code=400, detail="One of template_name or template_key is required")
+
+    template_uuid: Optional[UUID] = None
+    if not request.template_name and request.template_key:
+        try:
+            template_uuid = UUID(request.template_key)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid template_key: {request.template_key!r}")
 
     # ── 2/3. Fetch lead via the lightweight JAWIS lead lookup (get_lead(),
     #        NOT get_lead_context() — manual sends need only name/email/
@@ -523,35 +556,57 @@ async def send_whatsapp(
     if not recipient_phone:
         raise HTTPException(status_code=400, detail=f"Lead {request.lead_id} has no phone number on file")
 
-    # ── 4/5. Fetch + render template via the existing TemplateService.
-    #        Stays synchronous — local DB + Jinja2, not the external Meta
-    #        round-trip being deferred below. ──────────────────────────
-    template_service = TemplateService(db)
-    try:
-        template = await template_service.get_template(template_uuid)
-    except TemplateNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    # ── 4/5. Resolve the template. Stays synchronous — local DB lookup/
+    #        render, not the external Meta round-trip being deferred below.
+    if request.template_name:
+        # New path: Meta-synced whatsapp_templates (WhatsApp Template
+        # Management Phase 1). Only APPROVED templates are sendable —
+        # Meta itself would reject anything else, and this table only
+        # tracks Meta's own approval state (see app/whatsapp_templates/).
+        wa_service = WhatsAppTemplateService(db)
+        wa_template = await wa_service.get_by_name_and_language(request.template_name, request.language)
+        if wa_template is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"WhatsApp template '{request.template_name}' ({request.language}) not found — run a Meta sync first",
+            )
+        if wa_template.status != "APPROVED":
+            raise HTTPException(
+                status_code=400,
+                detail=f"WhatsApp template '{request.template_name}' is '{wa_template.status}', not APPROVED",
+            )
+        resolved_template_name = wa_template.template_name
+        rendered_body = (await wa_service.preview(UUID(wa_template.id), request.variables)).body
+    else:
+        # Legacy path — unchanged behavior.
+        template_service = TemplateService(db)
+        try:
+            template = await template_service.get_template(template_uuid)
+        except TemplateNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
-    if template.channel != "whatsapp":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Template {request.template_key} is a '{template.channel}' template, not 'whatsapp'",
-        )
+        if template.channel != "whatsapp":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Template {request.template_key} is a '{template.channel}' template, not 'whatsapp'",
+            )
 
-    try:
-        # Reuses the same TemplateRenderer instance TemplateService already
-        # owns (mirrors render_email() above) — rendering logic itself is
-        # not duplicated. The rendered body isn't sent directly: Meta's
-        # WhatsApp Business API only accepts approved templates addressed
-        # by name with positional parameters (see below), the same
-        # contract SendWhatsAppExecutor already uses — this call exists to
-        # validate the variables against the template before sending. The
-        # rendered text is still kept (not discarded) as the best available
-        # display body for the timeline/webhook (Fix 4) even though Meta
-        # itself renders the approved template server-side.
-        rendered_body = template_service.renderer.render_whatsapp(template.content, request.variables)
-    except TemplateValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        try:
+            # Reuses the same TemplateRenderer instance TemplateService
+            # already owns (mirrors render_email() above) — rendering logic
+            # itself is not duplicated. The rendered body isn't sent
+            # directly: Meta's WhatsApp Business API only accepts approved
+            # templates addressed by name with positional parameters (see
+            # below), the same contract SendWhatsAppExecutor already uses —
+            # this call exists to validate the variables against the
+            # template before sending. The rendered text is still kept (not
+            # discarded) as the best available display body for the
+            # timeline/webhook (Fix 4) even though Meta itself renders the
+            # approved template server-side.
+            rendered_body = template_service.renderer.render_whatsapp(template.content, request.variables)
+        except TemplateValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        resolved_template_name = template.name
 
     # ── 6/7. Fast-ack (Fix 1): defer the actual Meta call + resulting DB
     #        write to a background task — see _send_whatsapp_and_record
@@ -560,7 +615,8 @@ async def send_whatsapp(
     event_id = uuid4()
     asyncio.create_task(
         _send_whatsapp_and_record(
-            event_id, request, recipient_phone, recipient_name, template.name, rendered_body,
+            event_id, request, recipient_phone, recipient_name,
+            resolved_template_name, request.language, rendered_body,
         )
     )
 
@@ -583,6 +639,14 @@ class JawisTemplateSchema(BaseModel):
     subject: Optional[str] = None
     body: str
     variables: List[str] = Field(default_factory=list)
+    # WhatsApp Template Management additions — populated only for
+    # channel=whatsapp entries (Meta-synced whatsapp_templates), None/absent
+    # for every other channel. template_name duplicates `name` under the
+    # literal field name JAWIS's WhatsApp picker expects; `name` is kept
+    # unchanged for whatever already parses it on other channels.
+    template_name: Optional[str] = None
+    language: Optional[str] = None
+    category: Optional[str] = None
 
 
 @router.get(
@@ -593,9 +657,10 @@ class JawisTemplateSchema(BaseModel):
 async def list_templates_for_jawis(
     channel: Optional[str] = None,
     status: Optional[str] = None,
+    language: Optional[str] = None,
     db: AsyncSession = Depends(get_db_session),
 ):
-    """Fix 3 — thin read wrapper around the existing Template Engine
+    """Thin read wrapper around the existing Template Engine
     (app/templates/services.py TemplateService), mounted under /api/messages
     (not /api/templates) deliberately: /api/templates already exists as
     JawCom's own unauthenticated CRUD API used by the frontend template
@@ -607,12 +672,16 @@ async def list_templates_for_jawis(
     to that whole prefix (see app/core/jawis_auth_middleware.py) with no
     middleware change needed.
 
-    No template storage or rendering logic is duplicated: list_templates()
-    and the renderer's variable extraction are both the same TemplateService
-    instances used by send_email/send_whatsapp above.
+    channel=whatsapp returns only Meta-synced, APPROVED whatsapp_templates
+    rows (TemplateService.list_templates() special-cases this — see
+    app/templates/services.py) — this is JAWIS's only path to WhatsApp
+    templates; JAWIS never calls Meta directly. No template storage or
+    variable-extraction logic is duplicated here: `t.variables` is already
+    correctly populated by TemplateService for both generic (name-keyed) and
+    WhatsApp (Meta's positional {{1}}/{{2}}, order-sensitive) templates.
     """
     template_service = TemplateService(db)
-    templates = await template_service.list_templates(channel=channel, status=status)
+    templates = await template_service.list_templates(channel=channel, status=status, language=language)
     return [
         JawisTemplateSchema(
             id=t.id,
@@ -622,7 +691,10 @@ async def list_templates_for_jawis(
             status=t.status,
             subject=t.subject,
             body=t.content,
-            variables=template_service.renderer._extract_variables(t.content),
+            variables=t.variables,
+            template_name=t.name if t.channel == "whatsapp" else None,
+            language=t.language,
+            category=t.category,
         )
         for t in templates
     ]

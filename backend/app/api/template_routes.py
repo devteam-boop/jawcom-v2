@@ -41,18 +41,31 @@ async def create_template(
 
 @router.get("/", response_model=List[TemplateSchema],
             summary="List templates",
-            description="Returns templates, optionally filtered by channel and/or status.")
+            description=(
+                "Returns templates, optionally filtered by channel/status/language. "
+                "channel=whatsapp is special-cased by TemplateService (WhatsApp "
+                "Template Management): it returns only Meta-synced, APPROVED "
+                "whatsapp_templates rows instead of the generic templates table — "
+                "status is forced to APPROVED for that channel regardless of the "
+                "status filter, matching Meta's own sendable-template rule."
+            ))
 async def list_templates(
     channel: Optional[str] = Query(None, description="Filter by channel (email|sms|whatsapp|push)"),
-    status: Optional[str] = Query(None, description="Filter by status (draft|active|inactive)"),
+    status: Optional[str] = Query(None, description="Filter by status (draft|active|inactive); ignored for channel=whatsapp, which is always APPROVED-only"),
+    language: Optional[str] = Query(None, description="Filter by language, e.g. en_US (whatsapp only)"),
     db: AsyncSession = Depends(get_db_session),
 ):
     service = TemplateService(db)
-    return await service.list_templates(channel=channel, status=status)
+    return await service.list_templates(channel=channel, status=status, language=language)
 
 
 @router.get("/{template_id}", response_model=TemplateSchema,
-            summary="Get template by ID")
+            summary="Get template by ID",
+            description=(
+                "Looks up the generic templates table first; if not found there, "
+                "falls back to Meta-synced whatsapp_templates so a single detail "
+                "endpoint works for both kinds of template id."
+            ))
 async def get_template(
     template_id: UUID,
     db: AsyncSession = Depends(get_db_session),

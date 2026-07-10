@@ -8,6 +8,7 @@ from .execution_routes import router as execution_router
 from .approval_routes import router as approval_router
 from .task_routes import router as task_router
 from .template_routes import router as template_router
+from .whatsapp_template_routes import router as whatsapp_template_router
 from .integration_routes import router as integration_router
 from .communication_event_routes import router as communication_event_router
 from .meta_webhook_routes import router as meta_webhook_router
@@ -31,6 +32,7 @@ __all__ = [
     "approval_router",
     "task_router",
     "template_router",
+    "whatsapp_template_router",
     "integration_router",
     "communication_event_router",
     "meta_webhook_router",

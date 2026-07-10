@@ -18,6 +18,7 @@ from app.api import (
     approval_router,
     task_router,
     template_router,
+    whatsapp_template_router,
     integration_router,
     communication_event_router,
     meta_webhook_router,
@@ -77,6 +78,7 @@ app.include_router(execution_router)
 app.include_router(approval_router)
 app.include_router(task_router)
 app.include_router(template_router)
+app.include_router(whatsapp_template_router)
 app.include_router(integration_router)
 app.include_router(communication_event_router)
 app.include_router(meta_webhook_router)
