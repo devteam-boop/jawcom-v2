@@ -19,3 +19,15 @@ class WhatsAppTemplateNotApprovedError(WhatsAppTemplateError):
 class MetaSyncError(WhatsAppTemplateError):
     """Raised when the Meta Cloud API list-templates call itself fails."""
     pass
+
+
+class MetaSubmissionError(WhatsAppTemplateError):
+    """Raised when Meta rejects a template creation submission (Phase 3) —
+    carries Meta's real error message verbatim; status must stay DRAFT."""
+    pass
+
+
+class WhatsAppTemplateInvalidStateError(WhatsAppTemplateError):
+    """Raised when an action is attempted against a template in the wrong
+    state (e.g. submitting a template that isn't DRAFT)."""
+    pass

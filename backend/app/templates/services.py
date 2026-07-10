@@ -104,11 +104,25 @@ class TemplateService:
         return self._to_schema(created)
 
     async def get_template(self, template_id: UUID) -> TemplateSchema:
-        """Raises TemplateNotFoundError if the template does not exist in
-        either the generic templates table or whatsapp_templates (checked
-        in that order — a random UUID collision between the two tables is
-        not realistically possible, so this never changes behavior for an
-        existing generic-table id)."""
+        """Raises TemplateNotFoundError if the template does not exist.
+
+        Resolution order (a random UUID collision across these is not
+        realistically possible, so this never changes behavior for an
+        existing generic-table id):
+        1. Generic templates table, by row id — unchanged behavior.
+        2. whatsapp_templates, by row id — a specific version, pinned.
+        3. whatsapp_templates, by family_id (WhatsApp Template Management
+           Phase 5) — resolves to that family's latest APPROVED version.
+           This is what lets Journey Engine's SendWhatsAppExecutor (which
+           only ever calls get_template(UUID(node_config["template_id"]))
+           and cannot be modified) automatically "follow" the latest
+           approved version: a Journey node configured with a family_id
+           instead of one specific row's id resolves here. A node still
+           configured with one specific historical row's id keeps
+           resolving to exactly that version via step 2 — expected, not a
+           bug, since there is no way to know a node "meant" to ask for
+           the latest version rather than that pinned one.
+        """
         template = await self.repo.get(template_id)
         if template:
             return self._to_schema(template)
@@ -116,6 +130,10 @@ class TemplateService:
         wa_template = await self.whatsapp_repo.get(template_id)
         if wa_template:
             return whatsapp_template_to_schema(wa_template)
+
+        wa_latest = await self.whatsapp_repo.get_latest_approved_by_family(template_id)
+        if wa_latest:
+            return whatsapp_template_to_schema(wa_latest)
 
         raise TemplateNotFoundError(f"Template {template_id} not found")
 
@@ -215,14 +233,17 @@ class TemplateService:
         self, channel: Optional[str] = None, status: Optional[str] = None,
         language: Optional[str] = None,
     ) -> List[TemplateSchema]:
-        """channel="whatsapp" is special-cased: returns only Meta-synced,
-        APPROVED whatsapp_templates rows (status is forced to APPROVED,
-        matching Meta's own sendable-template rule — the ``status`` param
-        is ignored in this branch; ``language`` only applies here) instead
-        of the generic table. Every other channel (or no channel filter)
-        is unchanged generic-table behavior."""
+        """channel="whatsapp" is special-cased: returns only the latest
+        APPROVED version per template family (WhatsApp Template Management
+        Phase 6) — never an older approved version, never a family whose
+        newest version is Pending/Rejected/Draft while an older version of
+        that same family is still approved (that older one is what's
+        returned). ``status`` is ignored in this branch — it's always
+        APPROVED, matching Meta's own sendable-template rule; ``language``
+        still applies. Every other channel (or no channel filter) is
+        unchanged generic-table behavior."""
         if channel == "whatsapp":
-            wa_templates = await self.whatsapp_repo.get_all(status="APPROVED", language=language)
+            wa_templates = await self.whatsapp_repo.get_latest_approved_per_family(language=language)
             return [whatsapp_template_to_schema(t) for t in wa_templates]
 
         templates = await self.repo.get_all(channel=channel, status=status)

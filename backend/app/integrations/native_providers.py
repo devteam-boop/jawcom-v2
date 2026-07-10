@@ -34,6 +34,7 @@ providers via env var doesn't silently change failure semantics from
 """
 
 import logging
+from datetime import datetime
 from typing import Any, Dict
 
 from .base import BaseIntegration
@@ -94,7 +95,42 @@ class MetaWhatsAppIntegration(BaseIntegration):
         # Additive only — does not change any existing key, and the engine
         # itself is not touched.
         result["message_id"] = result.get("provider_message_id")
+
+        await self._increment_template_usage(payload)
+
         return result
+
+    async def _increment_template_usage(self, payload: Dict[str, Any]) -> None:
+        """WhatsApp Template Management Phase 7 — usage_count/last_used_at,
+        counted once per confirmed (non-failed, we're past the check above)
+        Meta send. This is the one place both Manual Send
+        (app/api/message_routes.py) and Journey/Automation
+        (send_whatsapp_executor.py, via IntegrationFactory.get("whatsapp")
+        when JAWIS_WHATSAPP_PROVIDER=meta) funnel through, so it's the only
+        spot that can count both without touching Execution Engine.
+
+        Re-resolves by (template_name, language) rather than requiring a
+        pre-resolved row id in the payload — Journey Engine's executor has
+        no such id to pass (see send_whatsapp_executor.py, unmodified), and
+        re-resolving to "whichever version is currently approved" is also
+        the semantically correct row to attribute usage to (the one that
+        was actually live/sendable). A no-op (nothing incremented) for a
+        template_name that isn't in whatsapp_templates at all — e.g. the
+        legacy generic-table template_key send path.
+        """
+        template_name = payload.get("template_name")
+        if not template_name:
+            return
+        language = payload.get("language") or "en_US"
+
+        from app.database.session import async_session_maker
+        from app.repositories.whatsapp_template_repository import WhatsAppTemplateRepository
+
+        async with async_session_maker() as session:
+            repo = WhatsAppTemplateRepository(session)
+            template = await repo.get_latest_approved_by_name(template_name, language)
+            if template:
+                await repo.increment_usage(template.id, datetime.utcnow())
 
     async def health(self) -> Dict[str, Any]:
         provider = provider_registry.get_whatsapp_provider()

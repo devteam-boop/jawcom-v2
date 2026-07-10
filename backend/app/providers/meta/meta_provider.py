@@ -238,7 +238,14 @@ class MetaProvider(WhatsAppProvider):
             raise RuntimeError("MetaProvider not configured (missing business_account_id)")
 
         url = f"{self.GRAPH_BASE_URL}/{self.api_version}/{self.business_account_id}/message_templates"
-        params: Optional[Dict[str, Any]] = {"limit": limit}
+        # Explicit fields (rather than Meta's default set) so quality_score
+        # and rejected_reason come back too — needed by WhatsApp Template
+        # Management Phase 2's approval sync (quality_rating/rejection_reason
+        # tracking) and not returned by default.
+        params: Optional[Dict[str, Any]] = {
+            "limit": limit,
+            "fields": "id,name,language,category,status,components,quality_score,rejected_reason",
+        }
         templates: List[Dict[str, Any]] = []
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -252,6 +259,33 @@ class MetaProvider(WhatsAppProvider):
                 params = None  # the 'next' URL already carries every query param
 
         return templates
+
+    async def create_template(
+        self, name: str, category: str, language: str, components: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Submit a new template to Meta for review (WhatsApp Template
+        Management Phase 3 — "Submit to Meta"). Raises RuntimeError with
+        Meta's real response body on any non-2xx (malformed template,
+        duplicate name, invalid component, etc.) — the caller
+        (WhatsAppTemplateService.submit_to_meta) surfaces this verbatim and
+        must NOT set status to PENDING when this raises; only a successful
+        return here represents genuine Meta acceptance (still PENDING
+        review, never APPROVED — approval is only ever learned via
+        list_templates()/sync, never assumed here).
+        """
+        if not self.business_account_id:
+            raise RuntimeError("MetaProvider not configured (missing business_account_id)")
+
+        url = f"{self.GRAPH_BASE_URL}/{self.api_version}/{self.business_account_id}/message_templates"
+        body = {"name": name, "category": category, "language": language, "components": components}
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=self._headers(), json=body)
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Meta API error {response.status_code}: {response.text}")
+
+        return response.json()
 
     async def upload_media(self, media_url: str, media_type: str) -> str:
         """Download media from ``media_url`` and upload it to Meta, returning the media ID.

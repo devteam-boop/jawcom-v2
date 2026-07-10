@@ -560,20 +560,22 @@ async def send_whatsapp(
     #        render, not the external Meta round-trip being deferred below.
     if request.template_name:
         # New path: Meta-synced whatsapp_templates (WhatsApp Template
-        # Management Phase 1). Only APPROVED templates are sendable —
-        # Meta itself would reject anything else, and this table only
-        # tracks Meta's own approval state (see app/whatsapp_templates/).
+        # Management Phase 5). Resolves to the LATEST version of this
+        # (name, language) whose status is APPROVED — never a Pending/
+        # Rejected/Draft/Disabled/Paused version even if it's the newest
+        # one, and never silently falls back to some other version: if no
+        # approved version exists at all, the send fails clearly here with
+        # an explicit error rather than picking anything else.
         wa_service = WhatsAppTemplateService(db)
-        wa_template = await wa_service.get_by_name_and_language(request.template_name, request.language)
+        wa_template = await wa_service.resolve_latest_approved_by_name(request.template_name, request.language)
         if wa_template is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"WhatsApp template '{request.template_name}' ({request.language}) not found — run a Meta sync first",
-            )
-        if wa_template.status != "APPROVED":
-            raise HTTPException(
-                status_code=400,
-                detail=f"WhatsApp template '{request.template_name}' is '{wa_template.status}', not APPROVED",
+                detail=(
+                    f"No APPROVED version of WhatsApp template '{request.template_name}' ({request.language}) "
+                    "exists — either it has never been approved by Meta, or only Pending/Rejected/Draft "
+                    "versions exist. Run a Meta sync if you believe this is stale."
+                ),
             )
         resolved_template_name = wa_template.template_name
         rendered_body = (await wa_service.preview(UUID(wa_template.id), request.variables)).body
