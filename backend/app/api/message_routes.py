@@ -47,6 +47,11 @@ from app.communication_events.schemas import CommunicationEventCreateSchema
 from app.models.communication_event import CommunicationEventType, CommunicationEventChannel
 from app.repositories.communication_event_repository import CommunicationEventRepository
 from app.services.communication_event_service import CommunicationEventService
+from app.services.email_idempotency_service import (
+    check_and_reserve,
+    compute_dedup_key,
+    record_provider_message_id,
+)
 from app.whatsapp_templates.service import WhatsAppTemplateService
 
 logger = logging.getLogger(__name__)
@@ -153,10 +158,18 @@ async def _send_email_and_record(
     recipient_email: str,
     recipient_name: Optional[str],
     rendered: Dict[str, str],
+    dedup_key: str,
 ) -> None:
     """Background task: perform the actual Resend send and record the
     outcome, keyed on ``event_id`` already handed back to the caller in
     send_email()'s fast 202 response.
+
+    ``dedup_key`` is the same idempotency key send_email() already reserved
+    (app/services/email_idempotency_service.py) before dispatching this
+    task — used only to backfill the real provider_message_id onto that
+    reservation once Resend responds, so a retry that lands after this task
+    finishes (but still within the 60s window) returns the real id on its
+    IDEMPOTENCY_HIT instead of None.
 
     Lead lookup and template fetch/render already happened synchronously in
     send_email() (fast — one JAWIS callback + a local DB/Jinja2 pass, same
@@ -271,6 +284,7 @@ async def _send_email_and_record(
                 asyncio.create_task(
                     _fetch_and_store_rfc822_message_id(event.id, provider_message_id)
                 )
+                await record_provider_message_id(db, dedup_key, provider_message_id)
         except (ValueError, IntegrityError) as exc:
             await db.rollback()
             logger.warning(
@@ -357,6 +371,49 @@ async def send_email(
             "content": request.variables.get("body", ""),
         }
 
+    # ── 5.5. Idempotency (Manual Email only): a retried POST — same lead,
+    #        template/key, stage, module, context_id, and rendered
+    #        subject/body — within the last 60s must not trigger a second
+    #        real Resend send. Computed from the RENDERED subject/body (the
+    #        literal content Resend would receive), after template
+    #        resolution above, so it's the same regardless of which branch
+    #        (templated vs. manual custom email) produced `rendered`. See
+    #        app/services/email_idempotency_service.py for the atomic
+    #        reserve-or-detect-duplicate logic and IDEMPOTENCY_HIT/MISS
+    #        logging. ───────────────────────────────────────────────────
+    dedup_key = compute_dedup_key(
+        lead_id=request.lead_id,
+        template_key=request.template_key,
+        stage=request.stage,
+        module=request.module,
+        context_id=request.context_id,
+        subject=rendered["subject"],
+        body=rendered["content"],
+    )
+    # Per-attempt id (distinct from communication_event_id, which stays the
+    # same across the original request and every one of its duplicates) —
+    # logging-only, lets IDEMPOTENCY_HIT/MISS/EXPIRED lines be traced back
+    # to one specific HTTP request. Never included in the response.
+    request_id = str(uuid4())
+    idempotency = await check_and_reserve(
+        db, dedup_key,
+        lead_id=request.lead_id, template_key=request.template_key, request_id=request_id,
+    )
+    if idempotency.is_duplicate:
+        # Same response shape as a first-time send (Fix 1 below) — no
+        # Resend call, no new communication_events row; just the already-
+        # reserved ids from the original request. If the original send
+        # hasn't reached Resend yet (provider_message_id still None), say
+        # so explicitly ("processing") rather than implying delivery is
+        # already complete — "queued" once a real provider_message_id is
+        # known matches the original request's own eventual outcome.
+        return EmailSendResponse(
+            success=True,
+            status="processing" if idempotency.provider_message_id is None else "queued",
+            provider_message_id=idempotency.provider_message_id,
+            communication_event_id=str(idempotency.communication_event_id),
+        )
+
     # ── 6/7. Fast-ack (Fix 1): hand back a stable, pre-generated event_id
     #        immediately and defer the actual Resend call + resulting DB
     #        write to a background task — see _send_email_and_record above.
@@ -368,9 +425,9 @@ async def send_email(
     #        own contribution (the Resend round-trip) from the request's
     #        total latency. See report for the keep-warm/paid-tier
     #        recommendation, which is the actual fix for cold start itself.
-    event_id = uuid4()
+    event_id = idempotency.communication_event_id
     asyncio.create_task(
-        _send_email_and_record(event_id, request, recipient_email, recipient_name, rendered)
+        _send_email_and_record(event_id, request, recipient_email, recipient_name, rendered, dedup_key)
     )
 
     # ── 8. Return fast. `success`/`status` now mean "accepted for
