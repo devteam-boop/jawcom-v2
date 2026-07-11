@@ -140,6 +140,27 @@ async def archive_template(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/{template_id}/activate", response_model=TemplateSchema,
+             summary="Activate template (email only)",
+             description=(
+                 "Sets the template status to active, deactivating any other "
+                 "active version in the same template family so only one "
+                 "active version exists per family. Only channel=email "
+                 "templates support this action."
+             ))
+async def activate_template(
+    template_id: UUID,
+    db: AsyncSession = Depends(get_db_session),
+):
+    service = TemplateService(db)
+    try:
+        return await service.activate_template(template_id)
+    except TemplateNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except TemplateValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/{template_id}/usage", response_model=TemplateUsageSchema,
             summary="Get template usage",
             description="Lists stage mappings and flow nodes currently referencing this template.")

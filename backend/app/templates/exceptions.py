@@ -19,8 +19,3 @@ class TemplateValidationError(TemplateEngineError):
 class TemplateInUseError(TemplateEngineError):
     """Raised when trying to delete a template that is in use."""
     pass
-
-
-class InvalidTemplateStatusError(TemplateEngineError):
-    """Raised when template status is invalid for the requested operation."""
-    pass

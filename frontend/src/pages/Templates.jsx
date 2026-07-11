@@ -38,6 +38,7 @@ import {
   MessageCircle,
   MessageSquare,
   Bell,
+  CheckCircle2,
 } from "lucide-react";
 
 const CHANNELS = [
@@ -50,8 +51,15 @@ const CHANNELS = [
 const STATUS_META = {
   draft: { badge: "Draft", tone: "neutral" },
   active: { badge: "Active", tone: "success" },
-  inactive: { badge: "Archived", tone: "neutral" },
+  inactive: { badge: "Archived", tone: "danger" },
 };
+
+const STATUS_FILTERS = [
+  { key: "all", label: "All" },
+  { key: "draft", label: "Draft" },
+  { key: "active", label: "Active" },
+  { key: "inactive", label: "Archived" },
+];
 
 function extractVars(content = "") {
   const set = new Set();
@@ -71,6 +79,7 @@ const EMPTY_FORM = { name: "", channel: "whatsapp", subject: "", content: "" };
 export default function Templates() {
   const [folder, setFolder] = useState("whatsapp");
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const { templates, loading, refetch } = useTemplates(folder);
   const [selectedId, setSelectedId] = useState(null);
 
@@ -81,8 +90,12 @@ export default function Templates() {
   const [deleteTarget, setDeleteTarget] = useState(null);
 
   const filtered = useMemo(
-    () => templates.filter((t) => !query || `${t.name} ${t.content}`.toLowerCase().includes(query.toLowerCase())),
-    [templates, query]
+    () =>
+      templates.filter((t) => {
+        if (statusFilter !== "all" && t.status !== statusFilter) return false;
+        return !query || `${t.name} ${t.content}`.toLowerCase().includes(query.toLowerCase());
+      }),
+    [templates, query, statusFilter]
   );
   const selected = filtered.find((t) => t.id === selectedId) || filtered[0] || null;
   const activeChannel = CHANNELS.find((f) => f.key === folder);
@@ -153,6 +166,16 @@ export default function Templates() {
     }
   };
 
+  const handleActivate = async (template) => {
+    try {
+      await templateService.activate(template.id);
+      toast.success("Template activated");
+      await refetch();
+    } catch (err) {
+      toast.error(err?.body?.detail || err.message || "Failed to activate template");
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
@@ -213,6 +236,16 @@ export default function Templates() {
             </div>
             <span className="text-xs text-muted-foreground">{filtered.length} in {activeChannel?.label}</span>
           </div>
+
+          <Tabs value={statusFilter} onValueChange={setStatusFilter} className="mb-3">
+            <TabsList data-testid="template-status-filter">
+              {STATUS_FILTERS.map((f) => (
+                <TabsTrigger key={f.key} value={f.key} className="text-xs" data-testid={`status-filter-${f.key}`}>
+                  {f.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
 
           {loading ? (
             <div className="flex items-center justify-center p-12 text-sm text-muted-foreground">Loading…</div>
@@ -310,6 +343,18 @@ export default function Templates() {
               <div className="mt-5 space-y-1.5">
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</div>
                 <div className="grid grid-cols-2 gap-1.5">
+                  {selected.channel === "email" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      disabled={selected.status === "active"}
+                      onClick={() => handleActivate(selected)}
+                      data-testid="tpl-activate"
+                    >
+                      <CheckCircle2 className="mr-1 h-3 w-3" /> Activate
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => openEdit(selected)} data-testid="tpl-edit">
                     <Pencil className="mr-1 h-3 w-3" /> Edit
                   </Button>

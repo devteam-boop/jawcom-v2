@@ -23,6 +23,7 @@ from .renderer import TemplateRenderer
 from .exceptions import (
     TemplateNotFoundError,
     TemplateInUseError,
+    TemplateValidationError,
 )
 
 
@@ -99,6 +100,7 @@ class TemplateService:
             subject=data.subject,
             content=data.content,
             status=data.status or TemplateStatus.DRAFT.value,
+            family_id=uuid4(),
         )
         created = await self.repo.create(template)
         return self._to_schema(created)
@@ -122,6 +124,14 @@ class TemplateService:
            resolving to exactly that version via step 2 — expected, not a
            bug, since there is no way to know a node "meant" to ask for
            the latest version rather than that pinned one.
+        4. templates, by family_id, channel="email" (Email Template
+           Lifecycle) — same idea as step 3, for email: resolves to that
+           family's current ACTIVE version. Lets SendEmailExecutor (also
+           unmodified — see app/execution/executors/send_email_executor.py)
+           automatically resolve only ACTIVE email templates for any node
+           configured with a family_id, with the same pinned-row-wins
+           backward-compat guarantee as step 2/3 for nodes configured with
+           one specific row's id.
         """
         template = await self.repo.get(template_id)
         if template:
@@ -134,6 +144,10 @@ class TemplateService:
         wa_latest = await self.whatsapp_repo.get_latest_approved_by_family(template_id)
         if wa_latest:
             return whatsapp_template_to_schema(wa_latest)
+
+        email_active = await self.repo.get_active_by_family(template_id)
+        if email_active:
+            return self._to_schema(email_active)
 
         raise TemplateNotFoundError(f"Template {template_id} not found")
 
@@ -167,8 +181,44 @@ class TemplateService:
             template_id, TemplateUpdateSchema(status=TemplateStatus.INACTIVE.value)
         )
 
+    async def activate_template(self, template_id: UUID) -> TemplateSchema:
+        """Email Template Lifecycle: promote a draft/archived email template
+        to ACTIVE, deactivating any other ACTIVE version in the same family
+        so at most one ACTIVE version exists per family at a time.
+
+        Email-only: every other channel keeps using archive/update instead
+        (WhatsApp templates aren't even in this table — see
+        whatsapp_template_to_schema's module docstring).
+
+        Raises:
+            TemplateNotFoundError: If the template does not exist.
+            TemplateValidationError: If the template's channel isn't "email".
+
+        Concurrency: the actual activate + sibling-deactivate is done in
+        TemplateRepository.activate_and_deactivate_siblings() as one locked
+        transaction, so two simultaneous Activate calls for the same family
+        can never both end up ACTIVE (see that method's docstring).
+        """
+        template = await self.repo.get(template_id)
+        if not template:
+            raise TemplateNotFoundError(f"Template {template_id} not found")
+        if template.channel != "email":
+            channel_value = getattr(template.channel, "value", template.channel)
+            raise TemplateValidationError(
+                f"Only email templates support the Activate action (this template is '{channel_value}')"
+            )
+
+        updated = await self.repo.activate_and_deactivate_siblings(template_id, template.family_id)
+        if not updated:
+            raise TemplateNotFoundError(f"Template {template_id} not found")
+        return self._to_schema(updated)
+
     async def duplicate_template(self, template_id: UUID) -> TemplateSchema:
-        """Create a draft copy of an existing template."""
+        """Create a draft copy of an existing template, in the SAME family
+        as the original (Email Template Lifecycle) — this is what lets
+        Duplicate double as "start a new version of this template": editing
+        and then Activating the copy deactivates the original via
+        activate_template()'s sibling check above."""
         template = await self.repo.get(template_id)
         if not template:
             raise TemplateNotFoundError(f"Template {template_id} not found")
@@ -180,6 +230,7 @@ class TemplateService:
             subject=template.subject,
             content=template.content,
             status=TemplateStatus.DRAFT.value,
+            family_id=template.family_id,
         )
         created = await self.repo.create(copy)
         return self._to_schema(created)

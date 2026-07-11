@@ -20,5 +20,7 @@ export const templateService = {
 
   archive: async (id) => api.post(`/api/templates/${id}/archive`),
 
+  activate: async (id) => api.post(`/api/templates/${id}/activate`),
+
   getUsage: async (id) => api.get(`/api/templates/${id}/usage`),
 };

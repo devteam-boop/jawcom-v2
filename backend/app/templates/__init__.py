@@ -11,7 +11,6 @@ from .exceptions import (
     TemplateNotFoundError,
     TemplateValidationError,
     TemplateInUseError,
-    InvalidTemplateStatusError
 )
 
 __all__ = [
@@ -23,5 +22,4 @@ __all__ = [
     "TemplateNotFoundError",
     "TemplateValidationError",
     "TemplateInUseError",
-    "InvalidTemplateStatusError"
 ]

@@ -336,6 +336,14 @@ async def send_email(
                 status_code=400,
                 detail=f"Template {request.template_key} is a '{template.channel}' template, not 'email'",
             )
+        if template.status != "active":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Template {request.template_key} is '{template.status}', not 'active' — "
+                    "only active email templates can be sent"
+                ),
+            )
 
         try:
             rendered = template_service.renderer.render_email(
@@ -681,9 +689,16 @@ async def list_templates_for_jawis(
     variable-extraction logic is duplicated here: `t.variables` is already
     correctly populated by TemplateService for both generic (name-keyed) and
     WhatsApp (Meta's positional {{1}}/{{2}}, order-sensitive) templates.
+
+    Email Template Lifecycle: email-channel rows are always filtered down to
+    status="active" here, regardless of the `status` query param passed in
+    (or its absence) — a draft or archived email template must never reach
+    JAWIS's template picker (fetch endpoint or manual-send picker; both are
+    this same endpoint). Every other channel's filtering is unchanged.
     """
     template_service = TemplateService(db)
     templates = await template_service.list_templates(channel=channel, status=status, language=language)
+    templates = [t for t in templates if not (t.channel == "email" and t.status != "active")]
     return [
         JawisTemplateSchema(
             id=t.id,
