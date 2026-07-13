@@ -75,6 +75,39 @@ _STATUS_MAP = {
 }
 
 
+def _extract_inbound_text(message: Dict[str, Any]) -> Optional[str]:
+    """The customer's actual inbound message text, for the top-level
+    ``body`` field of a ``replied`` CommunicationEvent.
+
+    Must NEVER be the anchor's (original outbound) body — that was the bug:
+    record_inbound_status()'s enriched_payload.setdefault("body", ...) only
+    falls back to the anchor's body when the caller's payload doesn't
+    already have a "body" key, so this function's result is set explicitly
+    at the call site to pre-empt that fallback for replies specifically
+    (delivered/read events are unaffected — they're built in the separate
+    statuses[] loop above and never call this).
+
+    Meta's inbound message shape varies by type; text is the common case
+    ("hii" in the reported bug). Falls back to a short label for common
+    non-text types rather than leaving body silently empty; returns None
+    for anything unrecognized (record_inbound_status will then store no
+    body rather than guessing).
+    """
+    if "text" in message:
+        return (message.get("text") or {}).get("body")
+    if "button" in message:
+        return (message.get("button") or {}).get("text")
+    if "interactive" in message:
+        interactive = message.get("interactive") or {}
+        reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
+        return reply.get("title")
+    for media_type in ("image", "video", "document", "audio", "sticker"):
+        if media_type in message:
+            caption = (message.get(media_type) or {}).get("caption")
+            return caption or f"[{media_type}]"
+    return None
+
+
 @router.get("/", include_in_schema=False)
 async def verify_meta_webhook(
     hub_mode: str = Query(None, alias="hub.mode"),
@@ -210,13 +243,27 @@ async def receive_meta_webhook(
                     "Inbound WhatsApp message matched via strategy=%s (from=%s, anchor_provider_message_id=%s)",
                     strategy, from_phone, anchor_provider_message_id,
                 )
+                # "body" set explicitly to the CLIENT'S inbound text — must
+                # not be left absent here, or record_inbound_status()'s
+                # setdefault("body", anchor_payload.get("body")) silently
+                # backfills it with the original OUTBOUND template text
+                # (the reported bug: a reply showing the template body
+                # instead of what the customer actually sent). stage/
+                # source/template_key are deliberately still inherited from
+                # the anchor via that same setdefault chain — unchanged,
+                # that part is correct (it's how the reply is attributed to
+                # the right lead/journey/template).
                 created = await event_service.record_inbound_status(
                     provider_message_id=anchor_provider_message_id,
                     event_type=CommunicationEventType.REPLIED.value,
                     channel=CommunicationEventChannel.WHATSAPP.value,
                     provider="meta",
                     dedup_key=message.get("id"),
-                    payload={"raw_message": message, "match_strategy": strategy},
+                    payload={
+                        "raw_message": message,
+                        "match_strategy": strategy,
+                        "body": _extract_inbound_text(message),
+                    },
                 )
                 if created:
                     recorded += 1
