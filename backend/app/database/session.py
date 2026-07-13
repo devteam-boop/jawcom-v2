@@ -2,6 +2,7 @@
 
 import logging
 
+from fastapi import HTTPException
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -48,6 +49,16 @@ async def get_db() -> AsyncSession:
     async with async_session_maker() as session:
         try:
             yield session
+        except HTTPException as e:
+            # An intentional, well-formed API response raised by route/
+            # service code (404 not found, 409 business-rule conflict,
+            # etc.) — not a database failure. Still rolled back (any
+            # exception leaves the session dirty), but logged at INFO so
+            # expected 4xx rejections don't show up as ERROR-level noise
+            # in Render's log stream and get mistaken for real failures.
+            await session.rollback()
+            logger.info(f"Request rejected with {e.status_code}: {e.detail}")
+            raise
         except Exception as e:
             await session.rollback()
             logger.error(f"Database session error: {e}")
