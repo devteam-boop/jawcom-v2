@@ -68,7 +68,12 @@ function CanvasInner({
         nodesDraggable={true}
         nodesConnectable={true}
         elementsSelectable={true}
-        deleteKeyCode="Delete"
+        // Disabled (was "Delete"): the raw keyboard shortcut deleted
+        // whatever was selected immediately, with no confirmation dialog
+        // and no way to exclude the Trigger node from being deletable.
+        // Deletion now goes exclusively through PropertiesPanel's Delete
+        // Node button + confirmation dialog, which enforces both.
+        deleteKeyCode={null}
         snapToGrid
         snapGrid={[20, 20]}
       >

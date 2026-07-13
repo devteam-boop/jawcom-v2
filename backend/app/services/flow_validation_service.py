@@ -12,8 +12,8 @@ Validation covers two categories:
 
 2. Node configuration validation
    - Delay / Wait: duration > 0
-   - Send WhatsApp: template_name required
-   - Send Email: subject and template_name required
+   - Send WhatsApp: template_id or template_name required
+   - Send Email: subject required; template_id or template_name required
    - Notification: title and message required
    - Condition: field, operator and value required
 """
@@ -184,9 +184,19 @@ class FlowValidationService:
                     ))
 
             elif ntype == "send_whatsapp":
-                if not config.get("template_name"):
+                # Accepts EITHER field: the Properties Panel's template
+                # picker (PropertiesPanel.jsx TemplateSelectField) stores
+                # the selected template's id under template_id — checking
+                # template_name only (the old check) meant a template
+                # selected through the actual dropdown never validated,
+                # since that field was never populated by the UI at all.
+                # template_name alone is also still accepted so any
+                # existing journey/API caller using the legacy free-text
+                # convention (see send_whatsapp_executor.py's fallback)
+                # keeps validating unchanged.
+                if not config.get("template_id") and not config.get("template_name"):
                     errors.append(_node_error(
-                        f"Send WhatsApp '{lbl}' requires a template name",
+                        f"Send WhatsApp '{lbl}' requires a template (select one from the dropdown)",
                         node_id=nid,
                     ))
 
@@ -196,9 +206,12 @@ class FlowValidationService:
                         f"Send Email '{lbl}' requires a subject",
                         node_id=nid,
                     ))
-                if not config.get("template_name"):
+                # Same template_id/template_name acceptance as send_whatsapp
+                # above — matches what the UI actually stores and what
+                # send_email_executor.py already accepts.
+                if not config.get("template_id") and not config.get("template_name"):
                     errors.append(_node_error(
-                        f"Send Email '{lbl}' requires a template name",
+                        f"Send Email '{lbl}' requires a template (select one from the dropdown)",
                         node_id=nid,
                     ))
 

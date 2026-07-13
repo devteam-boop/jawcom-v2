@@ -176,6 +176,26 @@ export default function FlowBuilder({ journeyId, journeyName }) {
     [setNodes]
   );
 
+  // Removes the node and every edge touching it (incoming + outgoing) so
+  // no orphan edge can remain — the two now-unconnected ends are left
+  // disconnected rather than auto-rewired (see PropertiesPanel's delete
+  // confirmation copy): auto-reconnecting risks silently producing a
+  // logically wrong flow (e.g. mis-wiring a Condition node's true/false
+  // branches), whereas leaving a gap is unambiguous and the existing graph
+  // validator (flow_validation_service.py) already reports it clearly
+  // ("has no incoming/outgoing connections") if the user tries to publish
+  // before reconnecting. Trigger is excluded from the delete entry point
+  // in PropertiesPanel, not here — this function itself has no node-type
+  // opinion, matching "every node except Trigger."
+  const onDeleteNode = useCallback(
+    (nodeId) => {
+      setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+      setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+      setSelectedId((id) => (id === nodeId ? null : id));
+    },
+    [setNodes, setEdges]
+  );
+
   const buildDefinition = useCallback(() => {
     return {
       nodes: toApiNodes(nodes),
@@ -284,6 +304,7 @@ export default function FlowBuilder({ journeyId, journeyName }) {
         <PropertiesPanel
           selectedNode={selectedNode}
           onUpdateNode={onUpdateNode}
+          onDeleteNode={onDeleteNode}
         />
       </div>
     </div>

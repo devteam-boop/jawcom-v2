@@ -11,6 +11,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Trash2 } from "lucide-react";
 import { templateService } from "@/services/templates";
 
 const VARIABLE_PREVIEWS = {
@@ -78,10 +87,20 @@ function TemplateSelectField({ channel, value, onChange }) {
 
   const selected = templates.find((t) => t.id === value);
 
+  // Passes both id and the resolved name up in one call (not two separate
+  // onUpdateConfig calls) — the caller applies them as a single atomic
+  // config update, avoiding a stale-closure race where a second update
+  // built from the same pre-update `config` snapshot would clobber the
+  // first (see PropertiesPanel's handleConfigChangeBatch).
+  const handleChange = (id) => {
+    const tpl = templates.find((t) => t.id === id);
+    onChange({ template_id: id, template_name: tpl?.name || "" });
+  };
+
   return (
     <div className="space-y-1.5">
       <Label>Template</Label>
-      <Select value={value || undefined} onValueChange={onChange}>
+      <Select value={value || undefined} onValueChange={handleChange}>
         <SelectTrigger>
           <SelectValue placeholder={loading ? "Loading templates…" : "Select a template"} />
         </SelectTrigger>
@@ -102,7 +121,7 @@ function TemplateSelectField({ channel, value, onChange }) {
   );
 }
 
-function ConfigFields({ nodeType, config, onUpdateConfig }) {
+function ConfigFields({ nodeType, config, onUpdateConfig, onUpdateConfigBatch }) {
   switch (nodeType) {
     case "trigger":
       return (
@@ -185,7 +204,7 @@ function ConfigFields({ nodeType, config, onUpdateConfig }) {
           <TemplateSelectField
             channel="whatsapp"
             value={config.template_id || ""}
-            onChange={(id) => onUpdateConfig("template_id", id)}
+            onChange={onUpdateConfigBatch}
           />
         </>
       );
@@ -205,7 +224,7 @@ function ConfigFields({ nodeType, config, onUpdateConfig }) {
           <TemplateSelectField
             channel="email"
             value={config.template_id || ""}
-            onChange={(id) => onUpdateConfig("template_id", id)}
+            onChange={onUpdateConfigBatch}
           />
         </>
       );
@@ -537,7 +556,9 @@ function ConfigFields({ nodeType, config, onUpdateConfig }) {
   }
 }
 
-export default function PropertiesPanel({ selectedNode, onUpdateNode }) {
+export default function PropertiesPanel({ selectedNode, onUpdateNode, onDeleteNode }) {
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
   if (!selectedNode) {
     return (
       <aside className="border-l border-border bg-card/40 p-5">
@@ -549,6 +570,7 @@ export default function PropertiesPanel({ selectedNode, onUpdateNode }) {
   }
 
   const config = selectedNode.data.config || {};
+  const isTrigger = selectedNode.type === "trigger";
 
   const handleLabelChange = (e) => {
     onUpdateNode(selectedNode.id, { label: e.target.value });
@@ -558,6 +580,22 @@ export default function PropertiesPanel({ selectedNode, onUpdateNode }) {
     onUpdateNode(selectedNode.id, {
       config: { ...config, [key]: value },
     });
+  };
+
+  // Applies multiple config keys in one atomic update (vs. calling
+  // handleConfigChange twice, which would each build off the same
+  // pre-update `config` snapshot and the second call would clobber the
+  // first's change) — used by TemplateSelectField to set template_id and
+  // template_name together.
+  const handleConfigChangeBatch = (updates) => {
+    onUpdateNode(selectedNode.id, {
+      config: { ...config, ...updates },
+    });
+  };
+
+  const handleConfirmDelete = () => {
+    onDeleteNode(selectedNode.id);
+    setDeleteConfirmOpen(false);
   };
 
   return (
@@ -591,9 +629,44 @@ export default function PropertiesPanel({ selectedNode, onUpdateNode }) {
             nodeType={selectedNode.type}
             config={config}
             onUpdateConfig={handleConfigChange}
+            onUpdateConfigBatch={handleConfigChangeBatch}
           />
         </div>
+
+        {!isTrigger && (
+          <>
+            <hr className="border-border" />
+            <Button
+              variant="destructive"
+              size="sm"
+              className="w-full"
+              onClick={() => setDeleteConfirmOpen(true)}
+              data-testid="node-delete"
+            >
+              <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete Node
+            </Button>
+          </>
+        )}
       </div>
+
+      <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Node?</DialogTitle>
+            <DialogDescription>
+              This removes "{selectedNode.data.label}" and every connection to and from it. The
+              nodes on either side will be left disconnected — reconnect them afterward if the
+              flow needs to continue past this point. This cannot be undone (until you Save again).
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleConfirmDelete} data-testid="node-delete-confirm">
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
