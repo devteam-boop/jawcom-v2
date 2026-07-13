@@ -269,11 +269,26 @@ class WhatsAppTemplateService:
                 components=components,
             )
         except Exception as exc:
+            # Real Meta error (malformed/restricted/expired token/permission)
+            # — status stays DRAFT (never set to PENDING on a failed call),
+            # but the real error is persisted onto the row so it's visible
+            # in the Submitted/In Review panel without needing to re-read
+            # server logs, not just surfaced transiently to the caller.
+            template.rejection_reason = str(exc)
+            await self.repo.update(template)
             raise MetaSubmissionError(str(exc)) from exc
 
         provider_template_id = str(response.get("id") or "")
         if not provider_template_id:
-            raise MetaSubmissionError(f"Meta accepted the submission but returned no template id: {response}")
+            error = f"Meta accepted the submission but returned no template id: {response}"
+            template.rejection_reason = error
+            await self.repo.update(template)
+            raise MetaSubmissionError(error)
+
+        logger.info(
+            "WhatsAppTemplateService.submit_to_meta: template=%s provider_template_id=%s",
+            template.template_name, provider_template_id,
+        )
 
         template.provider_template_id = provider_template_id
         # Meta's create response includes its own initial status (almost
@@ -288,6 +303,12 @@ class WhatsAppTemplateService:
                 template.template_name,
             )
             template.status = "PENDING"
+        # Clears any rejection_reason left over from a previous failed
+        # submit attempt on this same DRAFT row — this is a fresh, genuine
+        # Meta acceptance, so a stale error from an earlier try must not
+        # keep showing next to the new PENDING status.
+        template.rejection_reason = None
+        template.last_synced_at = datetime.utcnow()
         await self.repo.update(template)
         return self._to_schema(template)
 

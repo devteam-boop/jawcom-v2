@@ -18,6 +18,7 @@ this task. ``get_message_status`` raises ``NotImplementedError`` rather
 than faking a status.
 """
 
+import logging
 import os
 from typing import Dict, Any, Optional, List
 
@@ -25,6 +26,8 @@ import httpx
 
 from ..base.whatsapp_provider import WhatsAppProvider
 from ..base.communication_provider import MessageStatus, MessageType
+
+logger = logging.getLogger(__name__)
 
 
 def _meta_error_text(response: httpx.Response) -> str:
@@ -307,8 +310,13 @@ class MetaProvider(WhatsAppProvider):
         url = f"{self.GRAPH_BASE_URL}/{self.api_version}/{self.business_account_id}/message_templates"
         body = {"name": name, "category": category, "language": language, "components": components}
 
+        logger.info("MetaProvider.create_template: POST %s", url)
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, headers=self._headers(), json=body)
+        logger.info(
+            "MetaProvider.create_template: response status=%s body=%s",
+            response.status_code, response.text,
+        )
 
         if response.status_code >= 400:
             raise RuntimeError(_meta_error_text(response))
