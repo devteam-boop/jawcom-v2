@@ -15,6 +15,8 @@ export const journeyService = {
 
   delete: async (id) => api.del(`/api/journeys/${id}`),
 
+  duplicate: async (id) => api.post(`/api/journeys/${id}/duplicate`),
+
   activate: async (id) => api.post(`/api/journeys/${id}/activate`),
 
   pause: async (id) => api.post(`/api/journeys/${id}/pause`),

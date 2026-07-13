@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import { JourneyList } from "@/modules/journeys";
 import { useJourneys } from "@/modules/journeys";
@@ -16,8 +17,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
 
 export default function Journeys() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const { journeys, loading, refetch } = useJourneys();
@@ -26,6 +29,8 @@ export default function Journeys() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createDesc, setCreateDesc] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   useEffect(() => {
     stageMappingService.list().then(setMappings).catch(() => {});
@@ -76,6 +81,33 @@ export default function Journeys() {
     }
   };
 
+  const handleDuplicate = async (journey) => {
+    try {
+      await journeyService.duplicate(journey.id);
+      toast.success(`Duplicated "${journey.name}"`);
+      refetch();
+    } catch (err) {
+      toast.error(err?.message || "Failed to duplicate journey");
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
+    try {
+      await journeyService.delete(deleteTarget.id);
+      toast.success(`Deleted "${deleteTarget.name}"`);
+      setDeleteTarget(null);
+      refetch();
+    } catch (err) {
+      toast.error(err?.message || "Failed to delete journey");
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const isDeleteBlocked = deleteTarget?.status === "active";
+
   if (loading) {
     return (
       <div data-testid="page-journeys">
@@ -99,6 +131,9 @@ export default function Journeys() {
           filter={filter}
           onFilterChange={setFilter}
           onCreate={() => setCreateOpen(true)}
+          onEdit={(journey) => navigate(`/journeys/${journey.id}`)}
+          onDuplicate={handleDuplicate}
+          onDeleteRequest={setDeleteTarget}
         />
       </div>
 
@@ -131,6 +166,31 @@ export default function Journeys() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button onClick={handleCreate}>Create</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Journey?</DialogTitle>
+            <DialogDescription>
+              {isDeleteBlocked
+                ? "Deactivate this journey before deleting."
+                : "This will permanently delete the journey definition. Execution history and analytics will not be deleted."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            {isDeleteBlocked ? (
+              <Button onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+                <Button variant="destructive" onClick={handleConfirmDelete} disabled={deleteLoading}>
+                  Delete
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

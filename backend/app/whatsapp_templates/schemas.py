@@ -23,6 +23,7 @@ class WhatsAppTemplateSchema(BaseModel):
     version: int
     quality_rating: Optional[str] = None
     rejection_reason: Optional[str] = None
+    last_synced_at: Optional[datetime] = None
     usage_count: int = 0
     last_used_at: Optional[datetime] = None
     created_at: datetime

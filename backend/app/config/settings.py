@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
@@ -49,11 +49,26 @@ class Settings(BaseSettings):
     WHATSAPP_API_KEY: Optional[str] = Field(
         default=None, description="Meta WhatsApp Business API key",
     )
+    # validation_alias: Step 0 audit found the deployed .env uses
+    # META_PHONE_NUMBER_ID / META_WABA_ACCESS_TOKEN / META_WABA_ID rather
+    # than these field names — accepting both so the already-configured
+    # production secrets are picked up without renaming them, while the
+    # rest of the codebase keeps referring to the WHATSAPP_*/META_BUSINESS_*
+    # attribute names.
     WHATSAPP_PHONE_NUMBER_ID: Optional[str] = Field(
-        default=None, description="Meta WhatsApp phone number ID",
+        default=None,
+        validation_alias=AliasChoices("WHATSAPP_PHONE_NUMBER_ID", "META_PHONE_NUMBER_ID"),
+        description="Meta WhatsApp phone number ID",
     )
     WHATSAPP_ACCESS_TOKEN: Optional[str] = Field(
-        default=None, description="Meta WhatsApp access token",
+        default=None,
+        validation_alias=AliasChoices("WHATSAPP_ACCESS_TOKEN", "META_WABA_ACCESS_TOKEN"),
+        description=(
+            "Meta WhatsApp access token. Testing tokens expire every 24h and are "
+            "rotated manually — MetaProvider reads this from os.environ directly "
+            "at construction time rather than through this cached Settings "
+            "singleton, so a rotated value is picked up without a process restart."
+        ),
     )
     EMAIL_PROVIDER: str = Field(
         default="smtp", description="Email provider (smtp, sendgrid, …)",
@@ -69,13 +84,22 @@ class Settings(BaseSettings):
     # Reuses WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID above; adds the
     # two fields those didn't cover.
     META_BUSINESS_ACCOUNT_ID: Optional[str] = Field(
-        default=None, description="Meta WhatsApp Business Account ID (required for template status lookups)",
+        default=None,
+        validation_alias=AliasChoices("META_BUSINESS_ACCOUNT_ID", "META_WABA_ID", "WABA_ID"),
+        description="Meta WhatsApp Business Account ID / WABA ID (required for template status lookups, sync, and submit)",
     )
     META_API_VERSION: str = Field(
         default="v21.0", description="Meta Graph API version used by MetaProvider",
     )
     META_WEBHOOK_VERIFY_TOKEN: Optional[str] = Field(
         default=None, description="Shared secret for Meta's GET webhook verification handshake (hub.verify_token)",
+    )
+    META_APP_SECRET: Optional[str] = Field(
+        default=None,
+        description=(
+            "Meta App Secret — used to verify the X-Hub-Signature-256 header on "
+            "inbound POST webhook deliveries before the body is trusted."
+        ),
     )
 
     # Resend Email API (native provider — app/providers/resend/resend_provider.py)

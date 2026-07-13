@@ -37,6 +37,7 @@ import {
   Play,
   ArrowLeft,
   UploadCloud,
+  Copy,
 } from "lucide-react";
 
 const SECTIONS = [
@@ -113,9 +114,23 @@ export default function JourneyDetail() {
     try {
       await journeyService.delete(id);
       setDeleteOpen(false);
+      toast.success("Journey deleted");
       navigate("/journeys", { replace: true });
     } catch (err) {
-      console.error("Delete failed", err);
+      toast.error(err?.message || "Failed to delete journey");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDuplicate = async () => {
+    setActionLoading(true);
+    try {
+      const duplicated = await journeyService.duplicate(id);
+      toast.success(`Duplicated as "${duplicated.name}"`);
+      navigate(`/journeys/${duplicated.id}`);
+    } catch (err) {
+      toast.error(err?.message || "Failed to duplicate journey");
     } finally {
       setActionLoading(false);
     }
@@ -487,6 +502,9 @@ export default function JourneyDetail() {
                 </Button>
               </>
             )}
+            <Button size="sm" variant="outline" onClick={handleDuplicate} disabled={actionLoading}>
+              <Copy className="mr-2 h-3.5 w-3.5" /> Duplicate
+            </Button>
             <Button size="sm" variant="destructive" onClick={() => setDeleteOpen(true)} disabled={actionLoading}>
               Delete
             </Button>
@@ -501,14 +519,22 @@ export default function JourneyDetail() {
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Journey</DialogTitle>
+            <DialogTitle>Delete Journey?</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{journey.name}"? This action cannot be undone. All associated stage mappings and running instances will be removed.
+              {journey.status === "active"
+                ? "Deactivate this journey before deleting."
+                : "This will permanently delete the journey definition. Execution history and analytics will not be deleted."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={actionLoading}>Delete</Button>
+            {journey.status === "active" ? (
+              <Button onClick={() => setDeleteOpen(false)}>Cancel</Button>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+                <Button variant="destructive" onClick={handleDelete} disabled={actionLoading}>Delete</Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

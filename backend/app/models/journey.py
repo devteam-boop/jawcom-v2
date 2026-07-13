@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, Enum, JSON, ForeignKey
+from sqlalchemy import Column, String, Text, Enum, JSON, ForeignKey, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from .base import Base, BaseModel
@@ -22,6 +22,8 @@ class Journey(Base, BaseModel):
     trigger_value = Column(String(255))
     flow_definition_id = Column(UUID(as_uuid=True), ForeignKey('flow_definitions.id'), nullable=True)
     config = Column(JSON, default={})
+    deleted_at = Column(DateTime, nullable=True)
+    deleted_by = Column(String(255), nullable=True)
 
     stage_mappings = relationship("StageMapping", back_populates="journey")
     running_instances = relationship("RunningJourneyInstance", back_populates="journey")

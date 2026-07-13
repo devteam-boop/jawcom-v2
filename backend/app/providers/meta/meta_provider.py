@@ -18,12 +18,28 @@ this task. ``get_message_status`` raises ``NotImplementedError`` rather
 than faking a status.
 """
 
+import os
 from typing import Dict, Any, Optional, List
 
 import httpx
 
 from ..base.whatsapp_provider import WhatsAppProvider
 from ..base.communication_provider import MessageStatus, MessageType
+
+
+def _meta_error_text(response: httpx.Response) -> str:
+    """Turn a non-2xx Graph API response into a clear, real error message.
+
+    401 gets a specific, actionable message (the WHATSAPP_ACCESS_TOKEN
+    testing token expires every 24h and is rotated manually — a bare "401"
+    is not obvious to whoever is looking at the error). Every other status
+    (permission errors included) passes Meta's own response body through
+    verbatim rather than a generic wrapper, since Meta's error body already
+    names the specific missing permission/malformed field.
+    """
+    if response.status_code == 401:
+        return "token expired — update WHATSAPP_ACCESS_TOKEN in env"
+    return f"Meta API error {response.status_code}: {response.text}"
 
 
 class MetaProvider(WhatsAppProvider):
@@ -44,7 +60,19 @@ class MetaProvider(WhatsAppProvider):
         from app.config.settings import get_settings
         settings = get_settings()
 
-        self.access_token = config.get("access_token") or settings.WHATSAPP_ACCESS_TOKEN
+        # access_token is read from os.environ directly, NOT through the
+        # (lru_cache'd, process-lifetime-frozen) Settings singleton: the
+        # testing WHATSAPP_ACCESS_TOKEN expires every 24h and is rotated
+        # manually in-place, and MetaProvider is constructed fresh per call
+        # site (submit_to_meta/sync_from_meta/send all do `MetaProvider({})`)
+        # — so reading the env var here means every call already picks up a
+        # rotated token without needing a process restart to bust the cache.
+        self.access_token = (
+            config.get("access_token")
+            or os.environ.get("WHATSAPP_ACCESS_TOKEN")
+            or os.environ.get("META_WABA_ACCESS_TOKEN")
+            or settings.WHATSAPP_ACCESS_TOKEN
+        )
         self.phone_number_id = config.get("phone_number_id") or settings.WHATSAPP_PHONE_NUMBER_ID
         self.business_account_id = config.get("business_account_id") or settings.META_BUSINESS_ACCOUNT_ID
         self.api_version = config.get("api_version") or settings.META_API_VERSION
@@ -106,7 +134,7 @@ class MetaProvider(WhatsAppProvider):
             return {
                 "provider_message_id": None,
                 "status": MessageStatus.FAILED.value,
-                "error": f"Meta API error {response.status_code}: {response.text}",
+                "error": _meta_error_text(response),
             }
 
         data = response.json()
@@ -172,7 +200,7 @@ class MetaProvider(WhatsAppProvider):
             return {
                 "provider_message_id": None,
                 "status": MessageStatus.FAILED.value,
-                "error": f"Meta API error {response.status_code}: {response.text}",
+                "error": _meta_error_text(response),
             }
 
         data = response.json()
@@ -252,7 +280,7 @@ class MetaProvider(WhatsAppProvider):
             while url:
                 response = await client.get(url, headers=self._headers(), params=params)
                 if response.status_code >= 400:
-                    raise RuntimeError(f"Meta API error {response.status_code}: {response.text}")
+                    raise RuntimeError(_meta_error_text(response))
                 data = response.json()
                 templates.extend(data.get("data") or [])
                 url = (data.get("paging") or {}).get("next")
@@ -283,7 +311,7 @@ class MetaProvider(WhatsAppProvider):
             response = await client.post(url, headers=self._headers(), json=body)
 
         if response.status_code >= 400:
-            raise RuntimeError(f"Meta API error {response.status_code}: {response.text}")
+            raise RuntimeError(_meta_error_text(response))
 
         return response.json()
 

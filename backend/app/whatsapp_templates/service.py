@@ -324,6 +324,10 @@ class WhatsAppTemplateService:
             await self._set_sync_state(when=None, error=error)
             raise MetaSyncError(error) from exc
 
+        # One timestamp for the whole pass — every row this sync scans is
+        # "confirmed against Meta as of" the same moment, whether or not its
+        # content actually changed.
+        synced_at = datetime.utcnow()
         scanned = created = updated = unchanged = 0
 
         for remote in remote_templates:
@@ -361,6 +365,7 @@ class WhatsAppTemplateService:
                     variables=variables,
                     quality_rating=quality_rating,
                     rejection_reason=rejection_reason,
+                    last_synced_at=synced_at,
                 )
                 await self.repo.create(new_template)
                 created += 1
@@ -381,6 +386,12 @@ class WhatsAppTemplateService:
                 or existing.rejection_reason != rejection_reason
             )
             if not changed:
+                # Content is identical, but this row was still just
+                # reconfirmed against Meta — stamp last_synced_at so its
+                # freshness marker doesn't go stale just because nothing else
+                # changed.
+                existing.last_synced_at = synced_at
+                await self.repo.update(existing)
                 unchanged += 1
                 continue
 
@@ -396,16 +407,58 @@ class WhatsAppTemplateService:
             existing.variables = variables
             existing.quality_rating = quality_rating
             existing.rejection_reason = rejection_reason
+            existing.last_synced_at = synced_at
             await self.repo.update(existing)
             updated += 1
 
-        synced_at = datetime.utcnow()
         await self._set_sync_state(when=synced_at, error=None)
 
         return WhatsAppTemplateSyncResultSchema(
             scanned=scanned, created=created, updated=updated, unchanged=unchanged,
             last_synced_at=synced_at,
         )
+
+    async def update_status_from_webhook(
+        self,
+        meta_template_id: str,
+        status: Optional[str] = None,
+        rejection_reason: Optional[str] = None,
+        quality_rating: Optional[str] = None,
+        category: Optional[str] = None,
+        language: Optional[str] = None,
+    ) -> Optional[WhatsAppTemplateSchema]:
+        """Part 3 — applies a single message_template_status_update webhook
+        event to the matching row, keyed by meta_template_id (this table's
+        provider_template_id — the same dedupe key sync_from_meta() upserts
+        on). Only touches fields the webhook payload actually supplied
+        (Meta's real payload for this event does not include every field
+        sync_from_meta() tracks, e.g. category/quality_rating are usually
+        absent) — never overwrites a known value with None just because the
+        webhook body didn't carry it.
+
+        Returns None (does not raise) when no row matches yet — this can
+        legitimately happen if Meta's push arrives before this template has
+        ever been synced/created locally; the caller (webhook route) must
+        still return 200 to Meta regardless.
+        """
+        template = await self.repo.get_by_provider_template_id(meta_template_id)
+        if template is None:
+            return None
+
+        if status is not None:
+            template.status = status
+        if rejection_reason is not None:
+            template.rejection_reason = rejection_reason
+        if quality_rating is not None:
+            template.quality_rating = quality_rating
+        if category is not None:
+            template.category = category
+        if language is not None:
+            template.language = language
+        template.last_synced_at = datetime.utcnow()
+
+        await self.repo.update(template)
+        return self._to_schema(template)
 
     def _to_schema(self, template: WhatsAppTemplate) -> WhatsAppTemplateSchema:
         return WhatsAppTemplateSchema(
@@ -427,6 +480,7 @@ class WhatsAppTemplateService:
             version=template.version,
             quality_rating=template.quality_rating,
             rejection_reason=template.rejection_reason,
+            last_synced_at=template.last_synced_at,
             usage_count=template.usage_count,
             last_used_at=template.last_used_at,
             created_at=template.created_at,

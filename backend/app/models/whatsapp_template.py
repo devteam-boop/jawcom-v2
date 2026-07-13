@@ -83,6 +83,13 @@ class WhatsAppTemplate(Base, BaseModel):
     # Phase 4/7 — mirrored from Meta on sync, operator-visible.
     quality_rating = Column(String(20), nullable=True)  # Meta's GREEN/YELLOW/RED/UNKNOWN
     rejection_reason = Column(Text, nullable=True)
+    # Per-row freshness marker — set by both sync_from_meta() (every scanned
+    # row, including ones with no field changes) and the message_template_
+    # status_update webhook handler (app/api/meta_webhook_routes.py), so a
+    # row's own "last confirmed against Meta" time is visible even when only
+    # one row changed rather than a full sync. Distinct from the global,
+    # sync-run-level timestamp in email_sync_state (get_last_synced_at()).
+    last_synced_at = Column(DateTime, nullable=True)
 
     # Phase 7 — incremented by MetaWhatsAppIntegration.execute() on every
     # confirmed (non-failed) Meta send that used this exact row, covering

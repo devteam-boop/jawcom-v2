@@ -11,6 +11,7 @@ import Automation from "@/pages/Automation";
 import AutomationBuilder from "@/pages/AutomationBuilder";
 import Assistant from "@/pages/Assistant";
 import Templates from "@/pages/Templates";
+import WhatsAppTemplates from "@/pages/WhatsAppTemplates";
 import Knowledge from "@/pages/Knowledge";
 import Integrations from "@/pages/Integrations";
 import Developers from "@/pages/Developers";
@@ -40,6 +41,7 @@ function App() {
             <Route path="/automation/builder" element={<AutomationBuilder />} />
             <Route path="/assistant" element={<Assistant />} />
             <Route path="/templates" element={<Templates />} />
+            <Route path="/templates/whatsapp" element={<WhatsAppTemplates />} />
             <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/followups" element={<Navigate to="/journeys" replace />} />
             <Route path="/reports" element={<Navigate to="/" replace />} />

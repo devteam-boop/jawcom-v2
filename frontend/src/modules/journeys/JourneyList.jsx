@@ -5,8 +5,14 @@ import FilterBar from "@/components/FilterBar";
 import DataTable from "@/components/DataTable";
 import StatusBadge from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { getLeadStages } from "@/services/stageProvider";
-import { Plus, Zap, Target } from "lucide-react";
+import { Plus, Zap, Target, MoreVertical, Pencil, Copy, Trash2 } from "lucide-react";
 
 const FILTER_TABS = [
   { label: "All", value: "all" },
@@ -15,7 +21,17 @@ const FILTER_TABS = [
   { label: "Paused", value: "Paused" },
 ];
 
-export default function JourneyList({ journeys, search, onSearchChange, filter, onFilterChange, onCreate }) {
+export default function JourneyList({
+  journeys,
+  search,
+  onSearchChange,
+  filter,
+  onFilterChange,
+  onCreate,
+  onEdit,
+  onDuplicate,
+  onDeleteRequest,
+}) {
   const navigate = useNavigate();
   const [stageLabels, setStageLabels] = useState({});
 
@@ -82,6 +98,41 @@ export default function JourneyList({ journeys, search, onSearchChange, filter, 
         const tone = r.health >= 90 ? "success" : r.health >= 70 ? "warning" : "danger";
         return <StatusBadge status={tone === "success" ? "Active" : tone === "warning" ? "Open" : "Lost"} tone={tone} />;
       },
+    },
+    {
+      key: "actions",
+      label: "",
+      className: "w-10",
+      render: (r) => (
+        <div onClick={(e) => e.stopPropagation()}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                data-testid={`journey-row-actions-${r.id}`}
+              >
+                <MoreVertical className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => onEdit?.(r)}>
+                <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onDuplicate?.(r)}>
+                <Copy className="mr-2 h-3.5 w-3.5" /> Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => onDeleteRequest?.(r)}
+                className="text-red-600 focus:text-red-600"
+              >
+                <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ),
     },
   ];
 

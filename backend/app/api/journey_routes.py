@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db_session
 from app.journeys.schemas import JourneySchema, JourneyCreateSchema, JourneyUpdateSchema
-from app.services.journey_service import JourneyService
+from app.services.journey_service import JourneyService, JourneyDeleteBlockedError
 from app.repositories.stage_mapping_repository import StageMappingRepository
 from app.models.flow_definition import FlowDefinition
 
@@ -74,15 +74,39 @@ async def update_journey(
 
 @router.delete("/{journey_id}", status_code=204,
                summary="Delete journey",
-               description="Deletes a journey and its associated stage mappings and instances.")
+               description="Soft-deletes a draft or inactive journey definition. Running instances, "
+                           "execution history, and analytics are never touched. Active journeys "
+                           "cannot be deleted until deactivated.")
 async def delete_journey(
+    journey_id: UUID,
+    deleted_by: Optional[str] = Query(None, description="Identifier of the user performing the delete"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    service = JourneyService(db)
+    try:
+        deleted = await service.delete(journey_id, deleted_by=deleted_by)
+    except JourneyDeleteBlockedError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Journey {journey_id} not found")
+
+
+@router.post("/{journey_id}/duplicate", response_model=JourneySchema, status_code=201,
+             summary="Duplicate journey",
+             description="Creates an independent draft copy of a journey, including its flow "
+                         "definition (nodes, edges, trigger, delays, conditions, email/WhatsApp "
+                         "nodes, variables). Running instances, analytics, execution history, and "
+                         "logs are never copied. The operation is transactional — if it fails, "
+                         "nothing is created.")
+async def duplicate_journey(
     journey_id: UUID,
     db: AsyncSession = Depends(get_db_session),
 ):
     service = JourneyService(db)
-    deleted = await service.delete(journey_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"Journey {journey_id} not found")
+    try:
+        return await service.duplicate(journey_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/{journey_id}/activate", response_model=JourneySchema,
