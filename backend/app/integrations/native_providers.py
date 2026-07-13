@@ -75,6 +75,21 @@ class MetaWhatsAppIntegration(BaseIntegration):
             raise NativeProviderError("No phone number available for recipient")
 
         variables = payload.get("variables") or {}
+        # Meta's approved-template send takes POSITIONAL parameters
+        # ({{1}}, {{2}}, ... substituted by Meta itself server-side, not
+        # pre-rendered text) — they must be ordered by the numeric key, not
+        # by dict insertion/JSON-key order. `variables.values()` previously
+        # sent them in whatever order the caller's dict/JSON happened to
+        # have, which only accidentally matched {{1}},{{2}},... when a
+        # caller's JSON literal already listed keys in that order — a
+        # multi-variable template with keys given out of order (e.g.
+        # {"2": ..., "1": ...}) would silently substitute the wrong value
+        # into the wrong position. Sorting by int(key) makes the order
+        # match the placeholders regardless of how the caller supplied them.
+        template_parameters = (
+            [str(variables[k]) for k in sorted(variables.keys(), key=lambda k: int(k))]
+            if variables else None
+        )
         result = await provider.send_template_message(
             recipient=phone.lstrip("+"),
             template_name=payload.get("template_name") or "",
@@ -83,7 +98,7 @@ class MetaWhatsAppIntegration(BaseIntegration):
             # "en_US" exactly as before unless a caller opts in (WhatsApp
             # Template Management Phase 1, Feature 5).
             template_language=payload.get("language") or "en_US",
-            template_parameters=list(variables.values()) if variables else None,
+            template_parameters=template_parameters,
         )
 
         if result.get("status") == "failed":

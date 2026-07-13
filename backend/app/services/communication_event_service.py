@@ -1,8 +1,8 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timedelta
+from typing import List, Optional, Tuple
 from uuid import UUID, uuid4
 
 import httpx
@@ -27,7 +27,29 @@ logger = logging.getLogger(__name__)
 _JAWIS_WEBHOOK_EVENT_TYPES = {
     "email_sent", "whatsapp_sent", "delivered", "read", "clicked", "replied", "failed",
 }
+
+# JAWIS's webhook only accepts its own dotted "message.*" names for the
+# WhatsApp channel; our stored event_type values (whatsapp_sent, delivered,
+# read, failed, replied — see CommunicationEventType) were being sent
+# verbatim and rejected with 422. Email's stored names (email_sent,
+# delivered, read, ...) are already what JAWIS accepts for the email
+# channel, so this mapping is applied ONLY when channel=="whatsapp" —
+# email's outbound payload is completely unchanged.
+_WHATSAPP_JAWIS_EVENT_NAMES = {
+    "whatsapp_sent": "message.sent",
+    "delivered": "message.delivered",
+    "read": "message.read",
+    "failed": "message.failed",
+    "replied": "message.reply",
+}
 _JAWIS_WEBHOOK_RETRY_DELAYS = [1, 5, 15]  # seconds; 1 initial attempt + 3 retries
+
+# Recency window for the phone-number reply-matching fallback (Issue 2) —
+# how far back to look for a prior whatsapp_sent to the same number when
+# Meta's inbound message has no context.id. Deliberately generous (72h)
+# since a customer replying to yesterday's message is still a genuine,
+# matchable reply, not a random inbound.
+_REPLY_PHONE_MATCH_WINDOW_HOURS = 72
 
 
 async def _publish_to_jawis(schema: CommunicationEventSchema) -> bool:
@@ -61,11 +83,16 @@ async def _publish_to_jawis(schema: CommunicationEventSchema) -> bool:
         return False
 
     payload = schema.payload or {}
+    # Outbound name only — communication_events.event_type in the DB is
+    # never touched, only what's put on the wire to JAWIS here.
+    jawis_event_type = schema.event_type
+    if schema.channel == "whatsapp":
+        jawis_event_type = _WHATSAPP_JAWIS_EVENT_NAMES.get(schema.event_type, schema.event_type)
     body = {
         # Stable per-event identifier for JAWIS-side dedupe on retry.
         "event_id": schema.id,
         "lead_id": schema.lead_id,
-        "event_type": schema.event_type,
+        "event_type": jawis_event_type,
         "channel": schema.channel,
         "provider": schema.provider,
         "provider_message_id": schema.provider_message_id,
@@ -211,6 +238,52 @@ class CommunicationEventService:
             source=source,
         )
         return [self._to_schema(e) for e in events]
+
+    async def resolve_whatsapp_reply_anchor(
+        self, context_id: Optional[str], from_phone: Optional[str],
+    ) -> Tuple[Optional[str], str]:
+        """Issue 2 — decide which prior whatsapp_sent event (by
+        provider_message_id) an inbound WhatsApp message should be
+        attached to, and by which strategy, so a genuine reply is never
+        silently dropped just because Meta didn't send a context.id (a
+        "fresh" message rather than a formal swipe-to-reply has none).
+
+        Tries, in order:
+          1. context.id, if present — the primary path (Meta explicitly
+             told us which outbound message this replies to). If Meta gave
+             us a context.id that doesn't match anything we actually sent,
+             falls through to the phone strategies below rather than
+             giving up.
+          2. The most recent whatsapp_sent to this phone number within the
+             last _REPLY_PHONE_MATCH_WINDOW_HOURS — a fresh message from a
+             known number is still a genuine reply in an ongoing
+             conversation.
+          3. The most recent whatsapp_sent to this phone number ever
+             (unbounded) — lower confidence (stale conversation), but still
+             a resolvable lead, so still surfaced rather than parked.
+
+        Returns (provider_message_id_or_None, strategy), where strategy is
+        one of "context_id", "phone_recent", "phone_any", "unmatched" — the
+        caller logs this so which path fired is always debuggable.
+        """
+        if context_id:
+            anchor = await self.repo.get_earliest_by_provider_message_id(context_id)
+            if anchor:
+                return context_id, "context_id"
+
+        if not from_phone:
+            return None, "unmatched"
+
+        recent_cutoff = datetime.utcnow() - timedelta(hours=_REPLY_PHONE_MATCH_WINDOW_HOURS)
+        anchor = await self.repo.get_latest_whatsapp_sent_by_phone(from_phone, since=recent_cutoff)
+        if anchor:
+            return anchor.provider_message_id, "phone_recent"
+
+        anchor = await self.repo.get_latest_whatsapp_sent_by_phone(from_phone, since=None)
+        if anchor:
+            return anchor.provider_message_id, "phone_any"
+
+        return None, "unmatched"
 
     async def record_inbound_status(
         self,

@@ -6,7 +6,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.base_repository import BaseRepository
-from app.models.communication_event import CommunicationEvent
+from app.models.communication_event import CommunicationEvent, CommunicationEventChannel
 
 
 class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
@@ -68,6 +68,41 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
             .order_by(CommunicationEvent.occurred_at.asc())
             .limit(1)
         )
+        return result.scalar_one_or_none()
+
+    async def get_latest_whatsapp_sent_by_phone(
+        self, phone: str, since: Optional[datetime] = None,
+    ) -> Optional[CommunicationEvent]:
+        """Fallback anchor lookup for an inbound WhatsApp message that has
+        no context.id (a fresh message rather than a formal swipe-to-reply)
+        — the most recent whatsapp_sent event addressed to this phone
+        number, so the reply can still be correlated to a lead/thread
+        instead of being dropped (see meta_webhook_routes.py's inbound
+        message handling).
+
+        Both sides are digits-only normalized (strips +, spaces, dashes)
+        before comparing — tolerates whatever format the lead's phone was
+        stored in at send time vs. Meta's raw MSISDN in the inbound
+        payload's `from` field.
+
+        `since`: bounds the lookup to a recency window (the primary,
+        higher-confidence call); omit for an unbounded last-resort lookup
+        when nothing recent matched.
+        """
+        query = (
+            select(CommunicationEvent)
+            .where(
+                CommunicationEvent.channel == CommunicationEventChannel.WHATSAPP.value,
+                CommunicationEvent.event_type == "whatsapp_sent",
+                text("regexp_replace(payload->>'to', '\\D', '', 'g') = regexp_replace(:phone, '\\D', '', 'g')"),
+            )
+            .params(phone=phone)
+            .order_by(CommunicationEvent.occurred_at.desc())
+            .limit(1)
+        )
+        if since:
+            query = query.where(CommunicationEvent.occurred_at >= since)
+        result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
     async def exists_by_provider_message_id_and_type(self, provider_message_id: str, event_type: str) -> bool:

@@ -174,33 +174,49 @@ async def receive_meta_webhook(
                 if created:
                     recorded += 1
 
-            # Inbound customer replies. Matched via context.id (the message
-            # this is a reply to) — if Meta didn't include it, there is no
-            # provider_message_id to match against, so it is skipped.
+            # Inbound customer replies. Matched primarily via context.id (the
+            # message this is a reply to); when Meta doesn't include one (a
+            # fresh message, not a formal swipe-to-reply), falls back to
+            # matching by phone number against the most recent outbound send
+            # — see CommunicationEventService.resolve_whatsapp_reply_anchor()
+            # for the full strategy chain. Never silently dropped: every
+            # inbound message either gets matched (any strategy) or is
+            # logged clearly as unmatched, still with a 200 response to Meta.
             #
             # dedup_key=message["id"] (WhatsApp's own message id, distinct
             # per inbound message): a lead can send multiple genuine
-            # separate replies to the same outbound message, all sharing
-            # the same context.id — without this, only the first reply
-            # would ever be recorded (provider_message_id+event_type
-            # idempotency would silently treat every later reply as a
-            # duplicate of the first).
+            # separate replies to the same outbound message, all resolving
+            # to the same anchor — without this, only the first reply would
+            # ever be recorded (provider_message_id+event_type idempotency
+            # would silently treat every later reply as a duplicate of the
+            # first).
             for message in value.get("messages") or []:
                 context = message.get("context") or {}
-                provider_message_id = context.get("id")
-                if not provider_message_id:
-                    logger.info(
-                        "Inbound WhatsApp message has no context.id — cannot match "
-                        "to a sent message via provider_message_id, skipping"
+                from_phone = message.get("from")
+                anchor_provider_message_id, strategy = await event_service.resolve_whatsapp_reply_anchor(
+                    context_id=context.get("id"), from_phone=from_phone,
+                )
+
+                if anchor_provider_message_id is None:
+                    logger.warning(
+                        "Inbound WhatsApp message unmatched (strategy=%s, from=%s, wamid=%s) — "
+                        "no prior sent message found for this number within any window; "
+                        "no lead to attach to, message not recorded (still 200 to Meta)",
+                        strategy, from_phone, message.get("id"),
                     )
                     continue
+
+                logger.info(
+                    "Inbound WhatsApp message matched via strategy=%s (from=%s, anchor_provider_message_id=%s)",
+                    strategy, from_phone, anchor_provider_message_id,
+                )
                 created = await event_service.record_inbound_status(
-                    provider_message_id=provider_message_id,
+                    provider_message_id=anchor_provider_message_id,
                     event_type=CommunicationEventType.REPLIED.value,
                     channel=CommunicationEventChannel.WHATSAPP.value,
                     provider="meta",
                     dedup_key=message.get("id"),
-                    payload={"raw_message": message},
+                    payload={"raw_message": message, "match_strategy": strategy},
                 )
                 if created:
                     recorded += 1
