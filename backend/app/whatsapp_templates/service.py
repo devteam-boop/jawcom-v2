@@ -1,11 +1,15 @@
 """WhatsApp Template Management service (Phase 1, Features 2/3/4/6).
 
 JawCom is the single source of truth for WhatsApp templates (see module
-docstring on app/models/whatsapp_template.py): every row here originates
-from sync_from_meta() — there is no create/update/delete path, matching
-Feature 8 ("No dummy templates... Everything must come from Meta Sync").
+docstring on app/models/whatsapp_template.py). Rows are written by three
+paths: sync_from_meta() (mirrors Meta's existing catalog, e.g. hello_world),
+create_and_submit()/create_draft() (the "New Template" UI action, local
+save + immediate Meta submission), and the message_template_status_update
+webhook (app/api/meta_webhook_routes.py, status/quality/rejection sync only
+— never creates rows). No other writer exists.
 """
 
+import json
 import logging
 import re
 from datetime import datetime
@@ -221,6 +225,47 @@ class WhatsAppTemplateService:
         created = await self.repo.create(template)
         return self._to_schema(created)
 
+    async def create_and_submit(self, data: WhatsAppTemplateCreateSchema) -> WhatsAppTemplateSchema:
+        """"New Template" action — create the local row AND immediately
+        attempt to submit it to Meta in the same call (unlike create_draft()
+        alone, which only ever saves locally). This is the endpoint the
+        create UI should call.
+
+        Always returns 201 with the row, whatever the Meta outcome: on
+        genuine Meta acceptance the returned row is status=PENDING with a
+        real provider_template_id; on any submit failure (bad token,
+        malformed template, permission error, or the local non-text-header
+        guard) the row is still saved and returned, left as DRAFT with the
+        real failure message in rejection_reason — the local save is never
+        lost just because the Meta call failed, and the caller (route) can
+        tell success from failure by reading the returned status field
+        rather than by exception type.
+        """
+        logger.info(
+            "creating template name=%s lang=%s category=%s",
+            data.template_name, data.language, data.category,
+        )
+        created = await self.create_draft(data)
+        logger.info("saved locally id=%s status=DRAFT", created.id)
+
+        try:
+            return await self.submit_to_meta(UUID(created.id))
+        except MetaSubmissionError:
+            # submit_to_meta() already persisted the real Meta error onto
+            # rejection_reason and left status=DRAFT before raising — return
+            # that current state instead of propagating the exception, so
+            # the create action still 201s with the (still-DRAFT) row.
+            return await self.get_template(UUID(created.id))
+        except WhatsAppTemplateInvalidStateError as exc:
+            # Local guard failure (e.g. non-text header — Phase 2's stub-only
+            # media flow) never reaches Meta, so submit_to_meta() didn't get
+            # a chance to persist anything — do it here so the row still
+            # explains why it's stuck in DRAFT.
+            template = await self.repo.get(UUID(created.id))
+            template.rejection_reason = str(exc)
+            await self.repo.update(template)
+            return self._to_schema(template)
+
     async def submit_to_meta(self, template_id: UUID) -> WhatsAppTemplateSchema:
         """Phase 3 — "Submit to Meta" action on a DRAFT template.
 
@@ -261,11 +306,22 @@ class WhatsAppTemplateService:
             components.append({"type": "BUTTONS", "buttons": template.buttons})
 
         provider = MetaProvider({})
+        graph_url = (
+            f"{provider.GRAPH_BASE_URL}/{provider.api_version}/{provider.business_account_id}/message_templates"
+        )
+        request_payload = {
+            "name": template.template_name,
+            "category": template.category or "UTILITY",
+            "language": template.language,
+            "components": components,
+        }
+        logger.info("submitting to Meta url=%s", graph_url)
+        logger.info("Meta request payload=%s", json.dumps(request_payload))
         try:
             response = await provider.create_template(
-                name=template.template_name,
-                category=template.category or "UTILITY",
-                language=template.language,
+                name=request_payload["name"],
+                category=request_payload["category"],
+                language=request_payload["language"],
                 components=components,
             )
         except Exception as exc:
@@ -274,6 +330,7 @@ class WhatsAppTemplateService:
             # but the real error is persisted onto the row so it's visible
             # in the Submitted/In Review panel without needing to re-read
             # server logs, not just surfaced transiently to the caller.
+            logger.error("Meta submit FAILED error=%s", exc)
             template.rejection_reason = str(exc)
             await self.repo.update(template)
             raise MetaSubmissionError(str(exc)) from exc
@@ -281,14 +338,10 @@ class WhatsAppTemplateService:
         provider_template_id = str(response.get("id") or "")
         if not provider_template_id:
             error = f"Meta accepted the submission but returned no template id: {response}"
+            logger.error("Meta submit FAILED error=%s", error)
             template.rejection_reason = error
             await self.repo.update(template)
             raise MetaSubmissionError(error)
-
-        logger.info(
-            "WhatsAppTemplateService.submit_to_meta: template=%s provider_template_id=%s",
-            template.template_name, provider_template_id,
-        )
 
         template.provider_template_id = provider_template_id
         # Meta's create response includes its own initial status (almost
@@ -303,6 +356,7 @@ class WhatsAppTemplateService:
                 template.template_name,
             )
             template.status = "PENDING"
+        logger.info("meta_template_id=%s status=%s", provider_template_id, template.status)
         # Clears any rejection_reason left over from a previous failed
         # submit attempt on this same DRAFT row — this is a fresh, genuine
         # Meta acceptance, so a stale error from an earlier try must not

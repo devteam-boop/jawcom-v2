@@ -73,12 +73,20 @@ async def list_whatsapp_templates(
     "",
     response_model=WhatsAppTemplateSchema,
     status_code=201,
-    summary="Create a local WhatsApp template DRAFT (no Meta call)",
+    summary="Create a WhatsApp template and immediately submit it to Meta",
     description=(
-        "Local-only row, status=DRAFT. If a family with this exact "
-        "(template_name, language) already exists, this becomes its next "
-        "version instead of a new family — this is how 'edit and resubmit' "
-        "works (Phase 5): there is no separate update endpoint."
+        "Saves the template locally, then immediately calls the Meta Graph "
+        "API to submit it for review. Always 201s with the row: on genuine "
+        "Meta acceptance it comes back status=PENDING with a real "
+        "provider_template_id; if the Meta submission fails for any reason "
+        "(bad/expired token, malformed template, permission error, or a "
+        "non-text header this build can't upload yet), the row is still "
+        "saved and returned as status=DRAFT with the real failure message "
+        "in rejection_reason — check the returned status, not just the "
+        "201, to know whether Meta actually accepted it. If a family with "
+        "this exact (template_name, language) already exists, this becomes "
+        "its next version instead of a new family — this is how 'edit and "
+        "resubmit' works (Phase 5): there is no separate update endpoint."
     ),
 )
 async def create_whatsapp_template_draft(
@@ -86,7 +94,7 @@ async def create_whatsapp_template_draft(
     db: AsyncSession = Depends(get_db_session),
 ):
     service = WhatsAppTemplateService(db)
-    return await service.create_draft(data)
+    return await service.create_and_submit(data)
 
 
 @router.post(

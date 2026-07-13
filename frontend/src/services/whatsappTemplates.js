@@ -15,7 +15,11 @@ export const whatsappTemplateService = {
     return api.get("/api/whatsapp-templates", params);
   },
 
-  createDraft: async (payload) => api.post("/api/whatsapp-templates", payload),
+  // Saves the template locally AND immediately submits it to Meta in one
+  // call — the returned row's `status` tells you the real outcome
+  // (PENDING = Meta accepted it; DRAFT + rejection_reason = local save
+  // succeeded but Meta submission failed for some reason).
+  create: async (payload) => api.post("/api/whatsapp-templates", payload),
 
   submit: async (id) => api.post(`/api/whatsapp-templates/${id}/submit`),
 

@@ -200,12 +200,21 @@ export default function WhatsAppTemplates() {
         buttons: form.buttons.filter((b) => b.text?.trim()),
         examples: bodyVariables.map((_, i) => form.examples[i] || ""),
       };
-      await whatsappTemplateService.createDraft(payload);
-      toast.success("Draft saved (local only — no Meta call yet)");
+      // Saves locally AND immediately submits to Meta — the response
+      // status tells us which actually happened; the row is created and
+      // visible in the panel either way, so both branches still refetch.
+      const created = await whatsappTemplateService.create(payload);
+      if (created.status === "PENDING") {
+        toast.success(`Submitted to Meta — ${created.template_name} is now PENDING review`);
+      } else if (created.rejection_reason) {
+        toast.error(`Saved as draft, but Meta submission failed: ${created.rejection_reason}`);
+      } else {
+        toast.success("Draft saved");
+      }
       setFormOpen(false);
       await refetch();
     } catch (err) {
-      toast.error(err?.body?.detail || err.message || "Failed to save draft");
+      toast.error(err?.body?.detail || err.message || "Failed to save template");
     } finally {
       setSaving(false);
     }
@@ -288,10 +297,11 @@ export default function WhatsAppTemplates() {
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New WhatsApp Template (Draft)</DialogTitle>
+            <DialogTitle>New WhatsApp Template</DialogTitle>
             <DialogDescription>
-              Saved locally as DRAFT — no Meta call happens until you press "Submit to Meta" on the
-              Submitted/In Review panel. Use <code>{"{{1}}"}</code>, <code>{"{{2}}"}</code>… in the body for variables.
+              Saved locally, then immediately submitted to Meta for review. If Meta rejects it, it stays
+              here as a Draft with the real error shown so you can fix and resubmit. Use{" "}
+              <code>{"{{1}}"}</code>, <code>{"{{2}}"}</code>… in the body for variables.
             </DialogDescription>
           </DialogHeader>
 
@@ -492,7 +502,7 @@ export default function WhatsAppTemplates() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving} data-testid="wa-save-draft">
-              {saving ? "Saving…" : "Save Draft"}
+              {saving ? "Submitting…" : "Create & Submit to Meta"}
             </Button>
           </DialogFooter>
         </DialogContent>

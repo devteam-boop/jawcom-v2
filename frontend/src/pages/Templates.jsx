@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import StatusBadge from "@/components/StatusBadge";
 import { Card } from "@/components/ui/card";
@@ -41,12 +42,21 @@ import {
   CheckCircle2,
 } from "lucide-react";
 
+// All four channels are browsable folders. WhatsApp is deliberately NOT in
+// CREATABLE_CHANNELS below — this page's create/edit dialog writes to the
+// generic `templates` table, never to `whatsapp_templates`, so letting
+// someone create/edit a "whatsapp" row here silently produced a row that
+// never appeared in the WhatsApp panel and was never submitted to Meta
+// (root cause of the "create 201s but nothing happens" bug). WhatsApp
+// template creation now only happens on the dedicated /templates/whatsapp
+// page, which writes to the right table and submits to Meta.
 const CHANNELS = [
   { key: "whatsapp", label: "WhatsApp", icon: MessageCircle },
   { key: "email", label: "Email", icon: Mail },
   { key: "sms", label: "SMS", icon: MessageSquare },
   { key: "push", label: "Push", icon: Bell },
 ];
+const CREATABLE_CHANNELS = CHANNELS.filter((c) => c.key !== "whatsapp");
 
 const STATUS_META = {
   draft: { badge: "Draft", tone: "neutral" },
@@ -77,6 +87,7 @@ function previewContent(content) {
 const EMPTY_FORM = { name: "", channel: "whatsapp", subject: "", content: "" };
 
 export default function Templates() {
+  const navigate = useNavigate();
   const [folder, setFolder] = useState("whatsapp");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -101,12 +112,25 @@ export default function Templates() {
   const activeChannel = CHANNELS.find((f) => f.key === folder);
 
   const openCreate = () => {
+    if (folder === "whatsapp") {
+      navigate("/templates/whatsapp");
+      return;
+    }
     setEditingId(null);
     setForm({ ...EMPTY_FORM, channel: folder });
     setFormOpen(true);
   };
 
   const openEdit = (template) => {
+    if (template.channel === "whatsapp") {
+      // This row came from whatsapp_templates (Meta-synced/lifecycle) via
+      // the server-side redirect in TemplateService.list_templates —
+      // there is no update path for it through this generic table's PATCH
+      // endpoint. Editing a WhatsApp template means creating a new version
+      // on the dedicated page instead.
+      navigate("/templates/whatsapp");
+      return;
+    }
     setEditingId(template.id);
     setForm({
       name: template.name,
@@ -229,6 +253,14 @@ export default function Templates() {
 
         {/* Center: template list */}
         <main className="overflow-y-auto scrollbar-thin p-4 md:p-6" data-testid="template-list">
+          {folder === "whatsapp" && (
+            <div className="mb-3 flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs">
+              <span>Showing Meta-approved templates only. Create, submit, and track review status on the dedicated page.</span>
+              <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => navigate("/templates/whatsapp")}>
+                Open WhatsApp Templates
+              </Button>
+            </div>
+          )}
           <div className="mb-3 flex items-center gap-2">
             <div className="relative flex-1 max-w-sm">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -342,39 +374,56 @@ export default function Templates() {
 
               <div className="mt-5 space-y-1.5">
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Actions</div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {selected.channel === "email" && (
+                {selected.channel === "whatsapp" ? (
+                  // Duplicate/Archive/Delete below all write through the
+                  // generic templates table's endpoints — wrong table for a
+                  // whatsapp_templates row (Meta-synced/lifecycle). Managing
+                  // versions, resubmission, and status lives on the
+                  // dedicated page instead.
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-full text-xs"
+                    onClick={() => navigate("/templates/whatsapp")}
+                    data-testid="tpl-manage-whatsapp"
+                  >
+                    Manage on WhatsApp Templates page
+                  </Button>
+                ) : (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {selected.channel === "email" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        disabled={selected.status === "active"}
+                        onClick={() => handleActivate(selected)}
+                        data-testid="tpl-activate"
+                      >
+                        <CheckCircle2 className="mr-1 h-3 w-3" /> Activate
+                      </Button>
+                    )}
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => openEdit(selected)} data-testid="tpl-edit">
+                      <Pencil className="mr-1 h-3 w-3" /> Edit
+                    </Button>
+                    <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => handleDuplicate(selected)} data-testid="tpl-duplicate">
+                      <Copy className="mr-1 h-3 w-3" /> Duplicate
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
                       className="h-8 text-xs"
-                      disabled={selected.status === "active"}
-                      onClick={() => handleActivate(selected)}
-                      data-testid="tpl-activate"
+                      disabled={selected.status === "inactive"}
+                      onClick={() => handleArchive(selected)}
+                      data-testid="tpl-archive"
                     >
-                      <CheckCircle2 className="mr-1 h-3 w-3" /> Activate
+                      <Archive className="mr-1 h-3 w-3" /> Archive
                     </Button>
-                  )}
-                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => openEdit(selected)} data-testid="tpl-edit">
-                    <Pencil className="mr-1 h-3 w-3" /> Edit
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => handleDuplicate(selected)} data-testid="tpl-duplicate">
-                    <Copy className="mr-1 h-3 w-3" /> Duplicate
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={selected.status === "inactive"}
-                    onClick={() => handleArchive(selected)}
-                    data-testid="tpl-archive"
-                  >
-                    <Archive className="mr-1 h-3 w-3" /> Archive
-                  </Button>
-                  <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={() => setDeleteTarget(selected)} data-testid="tpl-delete">
-                    <Trash2 className="mr-1 h-3 w-3" /> Delete
-                  </Button>
-                </div>
+                    <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={() => setDeleteTarget(selected)} data-testid="tpl-delete">
+                      <Trash2 className="mr-1 h-3 w-3" /> Delete
+                    </Button>
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -407,7 +456,7 @@ export default function Templates() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {CHANNELS.map((c) => (
+                    {CREATABLE_CHANNELS.map((c) => (
                       <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>
                     ))}
                   </SelectContent>
