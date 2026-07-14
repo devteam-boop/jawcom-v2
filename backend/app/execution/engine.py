@@ -31,6 +31,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
+
 from app.database.session import async_session_maker
 from app.events.event_types import (
     LeadCreatedEvent,
@@ -524,9 +526,18 @@ class ExecutionEngine:
         channel = _NODE_TYPE_TO_CHANNEL.get(node_type or "", CommunicationEventChannel.SYSTEM.value)
         payload = payload or {}
         provider_response = payload.get("provider_response") if isinstance(payload, dict) else None
-        provider_message_id = (
-            provider_response.get("message_id") if isinstance(provider_response, dict) else None
-        )
+        # A provider can return HTTP 200 with a soft-failure body (e.g.
+        # JAWIS success:false, message_id:"") — "" is not a real message id
+        # and must never be stored as one: uq_communication_events_pmid_event_type
+        # only treats NULLs as distinct from each other (real, non-null ids
+        # still dedupe correctly), so two empty-string sends of the same
+        # event_type collide on commit. `or None` normalizes any falsy id
+        # (including "") to NULL, matching an id-less/failed send.
+        provider_message_id = None
+        if isinstance(provider_response, dict):
+            provider_message_id = provider_response.get("message_id") or None
+            if provider_response.get("success") is False:
+                payload = {**payload, "status": "failed"}
 
         try:
             await event_service.create(
@@ -540,6 +551,20 @@ class ExecutionEngine:
                     provider_message_id=provider_message_id,
                     payload=payload,
                 )
+            )
+        except IntegrityError:
+            # A duplicate (provider_message_id, event_type) pair — pre-fix,
+            # repeat empty-string sends; going forward, a genuine concurrent
+            # duplicate real id. Must roll back: the failed INSERT leaves
+            # this session's transaction aborted, and every later query on
+            # it (this node's own "success" FlowExecutionLog, right after
+            # this call returns) would otherwise fail too. A duplicate
+            # status event is idempotent, not a journey failure.
+            await event_service.repo.session.rollback()
+            logger.warning(
+                "Duplicate communication event (event_type=%s node_id=%s instance=%s provider_message_id=%s) "
+                "— idempotent no-op",
+                resolved_event_type, node_id, running_instance_id, provider_message_id,
             )
         except Exception:
             logger.exception(
