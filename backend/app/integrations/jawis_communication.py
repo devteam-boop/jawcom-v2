@@ -53,18 +53,35 @@ class JawisCommunicationIntegration(BaseIntegration):
                 f"(JAWIS_BASE_URL/JAWIS_API_TOKEN missing) — {self.name} send aborted"
             )
 
+        # JAWIS's Sprint-1 messaging API requires "lead_id" — callers
+        # (Journey Engine's send_whatsapp_executor.py / send_email_executor.py,
+        # untouched) build "recipient" instead, which JAWIS doesn't
+        # recognize (422 "Field required: lead_id"). Normalized here, at the
+        # integration/adapter boundary, rather than requiring every caller
+        # to already speak JAWIS's exact field name.
+        request_payload = dict(payload)
+        if "recipient" in request_payload and "lead_id" not in request_payload:
+            request_payload["lead_id"] = request_payload.pop("recipient")
+
         headers = {"Authorization": f"Bearer {cfg.jawis_api_token}"}
+
+        logger.info("%s: payload sent to JAWIS %s: %s", self.name, self._endpoint, request_payload)
 
         try:
             async with httpx.AsyncClient(
                 base_url=cfg.jawis_base_url, headers=headers, timeout=30.0
             ) as client:
-                response = await client.post(self._endpoint, json=payload)
+                response = await client.post(self._endpoint, json=request_payload)
         except httpx.RequestError as exc:
             logger.error("%s: JAWIS Communication API unavailable — %s", self.name, exc)
             raise JawisCommunicationError(
                 f"JAWIS Communication API unavailable: {exc}"
             ) from exc
+
+        logger.info(
+            "%s: response from JAWIS: status=%s body=%s",
+            self.name, response.status_code, response.text,
+        )
 
         if response.status_code >= 400:
             logger.error(
@@ -77,10 +94,6 @@ class JawisCommunicationIntegration(BaseIntegration):
             )
 
         data = response.json()
-        logger.info(
-            "%s: JAWIS Communication API responded status=%s message_id=%s",
-            self.name, data.get("status"), data.get("message_id"),
-        )
         # Returned exactly as received — executors store this verbatim as
         # `provider_response`, no transformation or key renaming.
         return data

@@ -28,10 +28,15 @@ class LeadSchema(BaseModel):
 class LeadSummarySchema(BaseModel):
     """Lightweight lead schema for the Communication Engine's lead lookup.
 
-    Matches JAWIS's reduced lead payload (id/name/email/phone/city only —
-    no stage_key/created_at/updated_at). Used only by JawisClient.get_lead();
-    LeadSchema (with stage_key/created_at/updated_at) is unchanged and is
-    still the type LeadContextSchema.lead expects.
+    Matches JAWIS's reduced lead payload (id/name/email/phone/city — no
+    stage_key/created_at/updated_at/company_id/assigned_to/metadata; those
+    were removed from JAWIS's lead payload). Used by JawisClient.get_lead()
+    and, via ``stage``, by get_lead_context() — see that method's docstring
+    for why the current lead's stage now comes from this response's
+    top-level ``stage`` field (a plain string) rather than a stage_key
+    lookup. This is also LeadContextSchema.lead's type now (LeadSchema,
+    which required stage_key/created_at/updated_at, is unusable here since
+    JAWIS no longer sends those).
     """
 
     id: str = Field(..., description="Lead ID from JAWIS")
@@ -39,6 +44,10 @@ class LeadSummarySchema(BaseModel):
     email: Optional[str] = Field(None, description="Lead email address")
     phone: Optional[str] = Field(None, description="Lead phone number")
     city: Optional[str] = Field(None, description="Lead city")
+    stage: Optional[str] = Field(
+        None, description="Lead's current stage (plain string, e.g. 'qualified') — "
+        "from the sibling 'stage' field in JAWIS's /api/leads/{id} response, not part of 'lead' itself",
+    )
 
 
 class CompanySchema(BaseModel):
@@ -117,8 +126,12 @@ class JawisApiResponse(BaseModel):
 
 class LeadContextSchema(BaseModel):
     """Schema for lead context data used in communication."""
-    
-    lead: LeadSchema = Field(..., description="Lead information")
+
+    # LeadSummarySchema, not LeadSchema (see that class's docstring) —
+    # JAWIS's actual /api/leads/{id} response no longer carries the fields
+    # LeadSchema requires (stage_key/created_at/updated_at), so LeadSchema
+    # can never be constructed from a real API response.
+    lead: LeadSummarySchema = Field(..., description="Lead information")
     company: Optional[CompanySchema] = Field(None, description="Associated company information")
     stage: StageSchema = Field(..., description="Current stage information")
     assigned_user: Optional[UserSchema] = Field(None, description="Assigned user information")

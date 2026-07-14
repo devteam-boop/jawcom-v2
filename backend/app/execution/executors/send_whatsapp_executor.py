@@ -49,13 +49,36 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
         template_name = node_config.get("template_name", "")
         raw_variables = node_config.get("variables", {})
 
+        template_declared_variables = []
         if template_id and template_service:
             template = await template_service.get_template(UUID(template_id))
             resolved_template = template.name
+            template_declared_variables = template.variables or []
         else:
             resolved_template = renderer.render(template_name) if renderer else template_name
 
         resolved_variables = renderer.render_all(raw_variables) if renderer else raw_variables
+
+        # The Journey Builder has no UI yet for mapping a template's
+        # positional {{1}}/{{2}} variables to lead fields (node.config never
+        # has a "variables" key), so raw_variables is always {} for a
+        # template with declared variables. Falls back to the one mapping
+        # convention every WhatsApp template observed so far uses
+        # ({{1}} = recipient name) rather than sending a template with
+        # unrendered placeholders — only when the node genuinely configured
+        # nothing, so an explicit (even empty) config always wins.
+        if not resolved_variables and template_declared_variables:
+            resolved_lead_for_vars = getattr(exec_ctx, "lead", None) if exec_ctx else None
+            lead_field_defaults = [
+                (resolved_lead_for_vars or {}).get("name"),
+                (resolved_lead_for_vars or {}).get("phone"),
+                (resolved_lead_for_vars or {}).get("email"),
+            ]
+            resolved_variables = {
+                var_key: value
+                for var_key, value in zip(template_declared_variables, lead_field_defaults)
+                if value
+            }
 
         logger.info(
             "SendWhatsAppExecutor: resolved template for lead=%s node=%s "
@@ -66,19 +89,27 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
         await asyncio.sleep(0.1)
 
         # ── Build integration request ──────────────────────────────
-        # exec_ctx.lead is already resolved by the engine for this node
-        # (no extra lookup) — recipient_phone/recipient_name are included
-        # alongside the existing recipient=lead_id so that if the
-        # "whatsapp" alias ever points at whatsapp_meta
-        # (JAWIS_WHATSAPP_PROVIDER=meta), that integration has what it
-        # needs without performing its own lead lookup. JawisWhatsAppIntegration
+        # Mirrors the manual-send contract (WhatsAppSendRequest in
+        # app/api/message_routes.py: lead_id/template_name/language/stage/
+        # variables/module/context_id) — JAWIS's /api/messages/whatsapp/send
+        # requires "lead_id" (422 "Field required" otherwise) and, per that
+        # same contract, "stage". recipient_phone/recipient_name are also
+        # included (exec_ctx.lead is already resolved by the engine for this
+        # node — no extra lookup) purely for whatsapp_meta: if the
+        # "whatsapp" alias ever points there (JAWIS_WHATSAPP_PROVIDER=meta),
+        # that integration reads recipient_phone directly and does no lead
+        # lookup of its own (see native_providers.py). JawisWhatsAppIntegration
         # (the default target) forwards the whole payload to JAWIS verbatim,
-        # so these extra keys are a no-op for the default path.
+        # so those two keys are a no-op for the default path.
         resolved_lead = getattr(exec_ctx, "lead", None) if exec_ctx else None
         request_payload = {
+            "lead_id": getattr(running_instance, "lead_id", lead_id),
             "template_name": resolved_template,
+            "language": node_config.get("language", "en_US"),
+            "stage": context.get("trigger_stage_key"),
             "variables": resolved_variables,
-            "recipient": getattr(running_instance, "lead_id", lead_id),
+            "module": "journey",
+            "context_id": str(running_instance.id),
             "recipient_phone": (resolved_lead or {}).get("phone"),
             "recipient_name": (resolved_lead or {}).get("name"),
         }

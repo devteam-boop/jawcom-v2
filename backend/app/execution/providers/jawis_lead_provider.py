@@ -26,15 +26,24 @@ class JawisLeadProvider(LeadProvider):
         ctx = await client.get_lead_context(str(lead_id))
 
         if ctx is None:
-            logger.warning("JAWIS lead context not found for lead_id=%s, falling back to empty context", lead_id)
+            # Only reached on a genuine failure now (lead not found, no
+            # stage on the lead, or a request error) — not on every call,
+            # as it was before client.get_lead_context() was fixed (it
+            # previously crashed on lead.stage_key, which doesn't exist on
+            # the lightweight lead JAWIS actually returns, and this
+            # fallback masked that as a normal "Unknown"/null-phone send).
+            logger.warning(
+                "JAWIS lead context genuinely unavailable for lead_id=%s (see prior error/warning log for why) "
+                "— falling back to an empty context; downstream send will lack a real phone/email",
+                lead_id,
+            )
             fallback = {
-                "lead": {"id": lead_id, "name": "Unknown", "email": None, "phone": None, "stage_key": None},
+                "lead": {"id": lead_id, "name": "Unknown", "email": None, "phone": None},
                 "company": None,
                 "owner": None,
                 "stage": None,
             }
-            # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
-            logger.info("TEMP DEBUG [10] Object returned by JawisLeadProvider.get_lead_context(): %s", fallback)
+            logger.info("Lead context before executor (lead_id=%s): %s", lead_id, fallback)
             return fallback
 
         lead = ctx.lead
@@ -42,16 +51,17 @@ class JawisLeadProvider(LeadProvider):
         stage = ctx.stage
         owner = ctx.assigned_user
 
+        # lead is a LeadSummarySchema (id/name/email/phone/city/stage) —
+        # company_id/assigned_to/metadata are no longer part of what JAWIS
+        # returns for a lead, so they're not read here; company/owner stay
+        # None (client.get_lead_context() no longer fetches them either —
+        # nothing left to fetch them by).
         result: Dict[str, Any] = {
             "lead": {
                 "id": lead.id,
                 "name": lead.name,
                 "email": lead.email,
                 "phone": lead.phone,
-                "stage_key": lead.stage_key,
-                "company_id": lead.company_id,
-                "assigned_to": lead.assigned_to,
-                "custom_fields": dict(lead.metadata or {}),
             },
             "company": {
                 "id": company.id,
@@ -75,13 +85,9 @@ class JawisLeadProvider(LeadProvider):
         }
 
         logger.info(
-            "JAWIS lead context resolved for lead_id=%s lead=%s company=%s owner=%s stage=%s",
-            lead_id, lead.name,
-            company.name if company else "N/A",
-            owner.name if owner else "N/A",
+            "JAWIS lead context resolved for lead_id=%s lead=%s phone=%s email=%s stage=%s",
+            lead_id, lead.name, lead.phone, lead.email,
             stage.name if stage else "N/A",
         )
-
-        # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
-        logger.info("TEMP DEBUG [10] Object returned by JawisLeadProvider.get_lead_context(): %s", result)
+        logger.info("Lead context before executor (lead_id=%s): %s", lead_id, result)
         return result

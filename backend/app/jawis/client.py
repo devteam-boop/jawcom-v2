@@ -171,11 +171,13 @@ class JawisClient:
         """
         Get lead information by ID.
 
-        Uses LeadSummarySchema (id/name/email/phone/city) — the lightweight
-        lead lookup used for message sending. JAWIS's lead endpoint no
-        longer returns stage_key/created_at/updated_at, so LeadSchema (which
-        requires them) is no longer usable here. If stage information is
-        needed, fetch it separately via get_stage().
+        Uses LeadSummarySchema (id/name/email/phone/city/stage) — the
+        lightweight lead lookup used for message sending and lead context.
+        JAWIS's lead endpoint no longer returns stage_key/created_at/
+        updated_at, so LeadSchema (which requires them) is no longer usable
+        here. The lead's current stage is returned as a plain string
+        alongside (not inside) "lead" in the response body — captured onto
+        the returned object's `.stage` below.
 
         Args:
             lead_id: Lead ID from JAWIS
@@ -192,27 +194,20 @@ class JawisClient:
             payload = data.get("data", data) if isinstance(data, dict) else data
             lead_data = payload.get("lead") if isinstance(payload, dict) else None
 
-            # TEMP DEBUG (remove after JAWIS lead-lookup investigation)
-            logger.info("TEMP DEBUG [4] data.keys(): %s", list(data.keys()) if isinstance(data, dict) else type(data))
-            logger.info("TEMP DEBUG [5] 'lead' key exists: %s", bool(lead_data))
-            if lead_data:
-                logger.info("TEMP DEBUG [6] lead.keys(): %s", list(lead_data.keys()) if isinstance(lead_data, dict) else type(lead_data))
-                logger.info(
-                    "TEMP DEBUG [7] email-like fields -> email=%r email_address=%r primary_email=%r contact_email=%r work_email=%r",
-                    lead_data.get("email") if isinstance(lead_data, dict) else None,
-                    lead_data.get("email_address") if isinstance(lead_data, dict) else None,
-                    lead_data.get("primary_email") if isinstance(lead_data, dict) else None,
-                    lead_data.get("contact_email") if isinstance(lead_data, dict) else None,
-                    lead_data.get("work_email") if isinstance(lead_data, dict) else None,
-                )
-                logger.info("TEMP DEBUG [8] object passed into LeadSummarySchema(...): %s", lead_data)
-
             if not lead_data:
-                logger.info("TEMP DEBUG [9] LeadSummarySchema.email after parsing: %s", None)
                 return None
 
-            result = LeadSummarySchema(**lead_data)
-            logger.info("TEMP DEBUG [9] LeadSummarySchema.email after parsing: %s", result.email)
+            # `stage` is a sibling of `lead` in the response, not a field of
+            # `lead` itself — merged in here (not overriding lead_data's own
+            # keys, since it has none named "stage") so get_lead_context()
+            # can use it without a separate, no-longer-possible stage_key
+            # lookup.
+            stage_value = payload.get("stage") if isinstance(payload, dict) else None
+            result = LeadSummarySchema(**{**lead_data, "stage": stage_value})
+            logger.info(
+                "JawisClient.get_lead: lead_id=%s name=%s phone=%s email=%s stage=%s",
+                lead_id, result.name, result.phone, result.email, result.stage,
+            )
             return result
         except JawisApiError as e:
             if e.status_code == 404:
@@ -285,45 +280,52 @@ class JawisClient:
     
     async def get_lead_context(self, lead_id: str) -> Optional[LeadContextSchema]:
         """
-        Get complete lead context including lead, company, stage, and assigned user.
-        
+        Get lead context (lead + current stage) for communication/execution.
+
+        Previously looked up a full StageSchema via get_stage(lead.stage_key)
+        and also fetched company/assigned_user via lead.company_id/
+        lead.assigned_to — all of that depended on fields JAWIS's lead
+        endpoint no longer returns (LeadSummarySchema has no stage_key/
+        company_id/assigned_to/metadata; see that class's docstring), so
+        every call here crashed with AttributeError before this fix, was
+        caught by the except below, and returned None — the caller
+        (JawisLeadProvider.get_lead_context()) then fell back to a fabricated
+        "Unknown"/null-phone lead, which is what actually reached the Send
+        WhatsApp node.
+
+        Company and assigned-user are no longer fetched (there is no field
+        left to fetch them by) — always None now, not a fabricated value.
+        Stage is synthesized from the plain string already present in the
+        lead response (JAWIS never sends full stage metadata — no
+        description/order — from this endpoint), which is sufficient for
+        `.key`/`.name` (both set to the same string); `.order` is a
+        placeholder 0, not a real pipeline position.
+
         Args:
             lead_id: Lead ID from JAWIS
-            
+
         Returns:
-            LeadContextSchema with all related data
+            LeadContextSchema, or None only on a genuine failure (lead not
+            found, no stage on the lead, or a request error) — never a
+            fabricated stand-in.
         """
         lead = await self.get_lead(lead_id)
         if not lead:
             return None
-        
-        # Fetch related data in parallel
-        company = None
-        stage = None
-        assigned_user = None
-        
+
         try:
-            # Get stage (required)
-            stage = await self.get_stage(lead.stage_key)
-            if not stage:
-                logger.warning(f"Stage {lead.stage_key} not found for lead {lead_id}")
+            if not lead.stage:
+                logger.warning(f"No stage returned by JAWIS for lead {lead_id} — cannot build lead context")
                 return None
-            
-            # Get company (optional)
-            if lead.company_id:
-                company = await self.get_company(lead.company_id)
-            
-            # Get assigned user (optional)
-            if lead.assigned_to:
-                assigned_user = await self.get_user(lead.assigned_to)
-            
+            stage = StageSchema(key=lead.stage, name=lead.stage, order=0)
+
             return LeadContextSchema(
                 lead=lead,
-                company=company,
+                company=None,
                 stage=stage,
-                assigned_user=assigned_user
+                assigned_user=None,
             )
-            
+
         except Exception as e:
             logger.error(f"Error building lead context for {lead_id}: {str(e)}")
             return None
