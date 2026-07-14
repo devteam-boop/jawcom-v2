@@ -103,12 +103,12 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
         # so those two keys are a no-op for the default path.
         resolved_lead = getattr(exec_ctx, "lead", None) if exec_ctx else None
         request_payload = {
-            "lead_id": getattr(running_instance, "lead_id", lead_id),
+            "lead_id": str(getattr(running_instance, "lead_id", lead_id)),
             "template_name": resolved_template,
             "language": node_config.get("language", "en_US"),
             "stage": context.get("trigger_stage_key"),
             "variables": resolved_variables,
-            "module": "journey",
+            "module": "general",
             "context_id": str(running_instance.id),
             "recipient_phone": (resolved_lead or {}).get("phone"),
             "recipient_name": (resolved_lead or {}).get("name"),
