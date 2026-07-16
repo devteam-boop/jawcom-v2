@@ -116,7 +116,23 @@ class SendEmailExecutor(BaseNodeExecutor):
         stage_at_send = context.get("trigger_stage_key")
         if session is not None:
             dedup_key = compute_dedup_key(lead_id, node_id, template_id or resolved_template)
-            if await check_and_reserve(session, dedup_key, lead_id=lead_id, node_id=node_id):
+            try:
+                is_duplicate = await check_and_reserve(session, dedup_key, lead_id=lead_id, node_id=node_id)
+            except Exception:
+                # A dedup mechanism must never block a send if its own table
+                # is unavailable (e.g. journey_send_idempotency missing) —
+                # log and proceed as if this were a fresh (non-duplicate)
+                # send. Roll back first: the failed statement left the
+                # session's transaction aborted, which would otherwise break
+                # every later query on this same session (e.g. logging).
+                logger.warning(
+                    "SendEmailExecutor: idempotency check failed (journey_send_idempotency "
+                    "table missing or unavailable) — proceeding with send for lead=%s node=%s",
+                    lead_id, node_id, exc_info=True,
+                )
+                await session.rollback()
+                is_duplicate = False
+            if is_duplicate:
                 logger.warning(
                     "SendEmailExecutor: duplicate send suppressed for lead=%s node=%s "
                     "template=%s (already reserved within the dedup window)",
