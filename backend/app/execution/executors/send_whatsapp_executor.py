@@ -18,6 +18,7 @@ from typing import Any, Dict
 from uuid import UUID
 
 from app.integrations import IntegrationFactory
+from app.services.journey_send_idempotency_service import check_and_reserve, compute_dedup_key
 from .base import BaseNodeExecutor, ExecutionResult
 from .utils import build_log_payload
 
@@ -91,16 +92,12 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
         # ── Build integration request ──────────────────────────────
         # Mirrors the manual-send contract (WhatsAppSendRequest in
         # app/api/message_routes.py: lead_id/template_name/language/stage/
-        # variables/module/context_id) — JAWIS's /api/messages/whatsapp/send
-        # requires "lead_id" (422 "Field required" otherwise) and, per that
-        # same contract, "stage". recipient_phone/recipient_name are also
-        # included (exec_ctx.lead is already resolved by the engine for this
-        # node — no extra lookup) purely for whatsapp_meta: if the
-        # "whatsapp" alias ever points there (JAWIS_WHATSAPP_PROVIDER=meta),
-        # that integration reads recipient_phone directly and does no lead
-        # lookup of its own (see native_providers.py). JawisWhatsAppIntegration
-        # (the default target) forwards the whole payload to JAWIS verbatim,
-        # so those two keys are a no-op for the default path.
+        # variables/module/context_id). Sent straight to "whatsapp_meta"
+        # (see below) — recipient_phone/recipient_name are what that
+        # integration actually reads (exec_ctx.lead is already resolved by
+        # the engine for this node, no extra lookup needed); the other keys
+        # are extra context carried in the payload but unused by the Meta
+        # send itself.
         resolved_lead = getattr(exec_ctx, "lead", None) if exec_ctx else None
         request_payload = {
             "lead_id": str(getattr(running_instance, "lead_id", lead_id)),
@@ -113,7 +110,59 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
             "recipient_phone": (resolved_lead or {}).get("phone"),
             "recipient_name": (resolved_lead or {}).get("name"),
         }
-        integration = IntegrationFactory.get("whatsapp")
+        # One journey step = one send: reserve (lead_id, node_id, template)
+        # before calling JAWIS so a webhook replay that spins up a second
+        # RunningJourneyInstance, or a node/journey retry that re-executes
+        # this already-sent node, can't fire the same WhatsApp send twice.
+        # exec_ctx.session is only unset for callers that don't go through
+        # the engine (none in the live app) — skip the guard rather than
+        # block the send in that case.
+        session = getattr(exec_ctx, "session", None) if exec_ctx else None
+        stage_at_send = context.get("trigger_stage_key")
+        if session is not None:
+            dedup_key = compute_dedup_key(lead_id, node_id, template_id or resolved_template)
+            if await check_and_reserve(session, dedup_key, lead_id=lead_id, node_id=node_id):
+                logger.warning(
+                    "SendWhatsAppExecutor: duplicate send suppressed for lead=%s node=%s "
+                    "template=%s (already reserved within the dedup window)",
+                    lead_id, node_id, template_id or resolved_template,
+                )
+                output_data = {
+                    "message": f"WhatsApp send skipped — duplicate of a recent send (template: {resolved_template})",
+                    "resolved_template_name": resolved_template,
+                    "resolved_variables": resolved_variables,
+                    "template_id": template_id,
+                    "raw_template_name": template_name,
+                    "raw_variables": raw_variables,
+                    "status": "skipped_duplicate",
+                    "stage_at_send": stage_at_send,
+                }
+                output = {
+                    "log_payload": build_log_payload(
+                        flow_definition_id=context.get("flow_definition_id", ""),
+                        running_instance_id=str(running_instance.id),
+                        lead_id=lead_id,
+                        node_id=node_id,
+                        node_type=self.node_type,
+                        status="skipped",
+                        input_data={"template_id": template_id, "template_name": template_name},
+                        output_data=output_data,
+                        started_at=started_at,
+                    ),
+                    **output_data,
+                }
+                return ExecutionResult(
+                    success=True,
+                    updated_context=context,
+                    status="skipped_duplicate",
+                    output=output,
+                )
+
+        # Direct Meta Cloud API send — bypasses the "whatsapp" alias (and
+        # therefore jawis_communication.py's relay to JAWIS) entirely, so
+        # automation sends through the same transport as manual send
+        # (app/api/message_routes.py, which already targets "whatsapp_meta").
+        integration = IntegrationFactory.get("whatsapp_meta")
         integration_response = await integration.execute(request_payload)
 
         output_data = {
@@ -124,6 +173,10 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
             "raw_template_name": template_name,
             "raw_variables": raw_variables,
             "provider_response": integration_response,
+            # Immutable snapshot of the stage that triggered this send — set
+            # once, here, never re-derived downstream (see
+            # CommunicationEventService._publish_to_jawis's "stage" field).
+            "stage_at_send": stage_at_send,
         }
 
         output = {

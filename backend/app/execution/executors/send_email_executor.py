@@ -19,6 +19,7 @@ from typing import Any, Dict
 from uuid import UUID
 
 from app.integrations import IntegrationFactory
+from app.services.journey_send_idempotency_service import check_and_reserve, compute_dedup_key
 from .base import BaseNodeExecutor, ExecutionResult
 from .utils import build_log_payload
 
@@ -72,14 +73,9 @@ class SendEmailExecutor(BaseNodeExecutor):
 
         # ── Build integration request ──────────────────────────────
         # exec_ctx.lead is already resolved by the engine for this node (no
-        # extra lookup) — recipient_email/recipient_name are included so
-        # that if the "email" alias ever points at email_resend
-        # (JAWIS_EMAIL_PROVIDER=resend), that integration has what it needs
-        # without performing its own lead lookup. JawisEmailIntegration (the
-        # default target) forwards the whole payload to JAWIS verbatim
-        # (requires "lead_id" as a string and "body", mirroring the manual
-        # contract in app/api/message_routes.py), so recipient_email/
-        # recipient_name are a no-op for that default path.
+        # extra lookup) — recipient_email/recipient_name are what
+        # "email_resend" (see below) actually reads, so it performs no lead
+        # lookup of its own.
         resolved_lead = getattr(exec_ctx, "lead", None) if exec_ctx else None
         recipient_email = (resolved_lead or {}).get("email")
 
@@ -102,12 +98,67 @@ class SendEmailExecutor(BaseNodeExecutor):
         request_payload = {
             "subject": resolved_subject,
             "template_name": resolved_template,
-            "body": resolved_content,
+            # ResendEmailIntegration.execute() reads "text" (not "body") —
+            # see app/integrations/native_providers.py.
+            "text": resolved_content,
             "lead_id": str(getattr(running_instance, "lead_id", lead_id)),
             "recipient_email": recipient_email,
             "recipient_name": (resolved_lead or {}).get("name"),
         }
-        integration = IntegrationFactory.get("email")
+        # One journey step = one send: reserve (lead_id, node_id, template)
+        # before calling JAWIS so a webhook replay that spins up a second
+        # RunningJourneyInstance, or a node/journey retry that re-executes
+        # this already-sent node, can't fire the same email send twice.
+        # exec_ctx.session is only unset for callers that don't go through
+        # the engine (none in the live app) — skip the guard rather than
+        # block the send in that case.
+        session = getattr(exec_ctx, "session", None) if exec_ctx else None
+        stage_at_send = context.get("trigger_stage_key")
+        if session is not None:
+            dedup_key = compute_dedup_key(lead_id, node_id, template_id or resolved_template)
+            if await check_and_reserve(session, dedup_key, lead_id=lead_id, node_id=node_id):
+                logger.warning(
+                    "SendEmailExecutor: duplicate send suppressed for lead=%s node=%s "
+                    "template=%s (already reserved within the dedup window)",
+                    lead_id, node_id, template_id or resolved_template,
+                )
+                output_data = {
+                    "message": f"Email send skipped — duplicate of a recent send (subject: {resolved_subject})",
+                    "resolved_subject": resolved_subject,
+                    "resolved_template_name": resolved_template,
+                    "resolved_content": resolved_content,
+                    "template_id": template_id,
+                    "raw_subject": raw_subject,
+                    "raw_template_name": template_name,
+                    "status": "skipped_duplicate",
+                    "stage_at_send": stage_at_send,
+                }
+                output = {
+                    "log_payload": build_log_payload(
+                        flow_definition_id=context.get("flow_definition_id", ""),
+                        running_instance_id=str(running_instance.id),
+                        lead_id=lead_id,
+                        node_id=node_id,
+                        node_type=self.node_type,
+                        status="skipped",
+                        input_data={"subject": raw_subject, "template_id": template_id, "template_name": template_name},
+                        output_data=output_data,
+                        started_at=started_at,
+                    ),
+                    **output_data,
+                }
+                return ExecutionResult(
+                    success=True,
+                    updated_context=context,
+                    status="skipped_duplicate",
+                    output=output,
+                )
+
+        # Direct Resend send — bypasses the "email" alias (and therefore
+        # jawis_communication.py's relay to JAWIS) entirely, so automation
+        # sends through the same transport as manual send
+        # (app/api/message_routes.py, which already targets "email_resend").
+        integration = IntegrationFactory.get("email_resend")
         integration_response = await integration.execute(request_payload)
 
         output_data = {
@@ -119,6 +170,10 @@ class SendEmailExecutor(BaseNodeExecutor):
             "raw_subject": raw_subject,
             "raw_template_name": template_name,
             "provider_response": integration_response,
+            # Immutable snapshot of the stage that triggered this send — set
+            # once, here, never re-derived downstream (see
+            # CommunicationEventService._publish_to_jawis's "stage" field).
+            "stage_at_send": stage_at_send,
         }
 
         output = {

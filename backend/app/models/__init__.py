@@ -8,6 +8,7 @@ from .flow_execution_log import FlowExecutionLog
 from .template import Template, TemplateChannel, TemplateStatus
 from .communication_event import CommunicationEvent, CommunicationEventType, CommunicationEventChannel
 from .email_sync_state import EmailSyncState
+from .journey_send_idempotency import JourneySendIdempotency
 
 __all__ = [
     "Base",
@@ -27,4 +28,5 @@ __all__ = [
     "CommunicationEventType",
     "CommunicationEventChannel",
     "EmailSyncState",
+    "JourneySendIdempotency",
 ]

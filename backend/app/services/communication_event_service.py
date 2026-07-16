@@ -39,6 +39,7 @@ _WHATSAPP_JAWIS_EVENT_NAMES = {
     "whatsapp_sent": "message.sent",
     "delivered": "message.delivered",
     "read": "message.read",
+    "clicked": "message.clicked",
     "failed": "message.failed",
     "replied": "message.reply",
 }
@@ -98,7 +99,13 @@ async def _publish_to_jawis(schema: CommunicationEventSchema) -> bool:
         "provider_message_id": schema.provider_message_id,
         "journey_id": schema.journey_id,
         "node_id": schema.node_id,
-        "stage": payload.get("stage"),
+        # Immutable snapshot from send time. Journey-driven sends
+        # (send_whatsapp_executor.py / send_email_executor.py) write
+        # "stage_at_send"; manual sends (app/api/message_routes.py) still
+        # write the pre-existing "stage" key — both are set once, at send
+        # time, and never re-derived, so falling back to "stage" preserves
+        # the manual-send contract unchanged.
+        "stage": payload.get("stage_at_send", payload.get("stage")),
         "source": payload.get("source"),
         "status": payload.get("status"),
         "template_key": payload.get("template_key"),

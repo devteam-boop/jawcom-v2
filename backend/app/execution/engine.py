@@ -228,6 +228,11 @@ class ExecutionEngine:
                     object.__setattr__(exec_ctx, "resolver", resolver)
                     object.__setattr__(exec_ctx, "renderer", renderer)
                     object.__setattr__(exec_ctx, "template_service", TemplateService(session))
+                    # Lets send_whatsapp_executor.py/send_email_executor.py
+                    # reserve a journey-send idempotency key on the same
+                    # session/transaction the engine already uses for this
+                    # instance — see journey_send_idempotency_service.py.
+                    object.__setattr__(exec_ctx, "session", session)
 
                     # 6. Resolve the first node (trigger) and execute it
                     first_node_id = self._resolve_first_node(flow_def.definition)
@@ -720,6 +725,9 @@ class ExecutionEngine:
                 object.__setattr__(exec_ctx, "resolver", resolver)
                 object.__setattr__(exec_ctx, "renderer", renderer)
                 object.__setattr__(exec_ctx, "template_service", TemplateService(session))
+                # See the matching comment in _execute_for_stage — same
+                # journey-send idempotency wiring for resume/retry.
+                object.__setattr__(exec_ctx, "session", session)
 
                 # Determine starting node
                 start_node_id = instance_data.get("current_node_id")

@@ -58,6 +58,13 @@ class ExecutionContext:
     resolver: Any = None
     renderer: Any = None
     template_service: Any = None
+    # AsyncSession the engine is using for this instance run — wired by
+    # ExecutionEngine (_execute_for_stage/_resume_from) via
+    # object.__setattr__, same as resolver/renderer/template_service above.
+    # Lets send_whatsapp_executor.py/send_email_executor.py reserve a
+    # journey-send idempotency key (app/services/journey_send_idempotency_service.py)
+    # on the same transaction, without changing this constructor's call sites.
+    session: Any = None
     context: Optional[Dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
