@@ -16,7 +16,7 @@ import {
 
 export const NAV_ITEMS = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard, testId: "nav-dashboard" },
-  { label: "Inbox", path: "/conversations", icon: MessagesSquare, testId: "nav-inbox", badge: 12 },
+  { label: "Inbox", path: "/conversations", icon: MessagesSquare, testId: "nav-inbox" },
   { label: "Contacts", path: "/contacts", icon: Users, testId: "nav-contacts" },
   { label: "Campaigns", path: "/campaigns", icon: Megaphone, testId: "nav-campaigns" },
   { label: "Automation", path: "/automation", icon: Zap, testId: "nav-automation" },

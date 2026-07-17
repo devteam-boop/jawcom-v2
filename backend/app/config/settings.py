@@ -138,6 +138,21 @@ class Settings(BaseSettings):
     JAWCOM_API_TOKEN: Optional[str] = Field(
         default=None, description="Shared bearer token for JAWIS<->JawCom hybrid communication auth",
     )
+
+    # JawCom's own agent session auth (Phase 3, Task 1) — distinct from
+    # JAWCOM_API_TOKEN above. This app has no per-user login system; this is
+    # a deliberately minimal shared-workspace passcode, NOT a multi-user
+    # auth system. A logged-in agent's session token is accepted (alongside
+    # JAWCOM_API_TOKEN) on /api/messages/* ONLY — never on
+    # /api/leads/*/journey/* or any other JAWIS-protected route, so a leaked
+    # agent session can never be used to impersonate JAWIS. See
+    # app/core/session_auth.py.
+    JAWCOM_APP_PASSWORD: Optional[str] = Field(
+        default=None, description="Shared passcode agents use to log in at /api/auth/login",
+    )
+    JAWCOM_SESSION_SECRET: Optional[str] = Field(
+        default=None, description="HMAC signing key for agent session tokens issued by /api/auth/login",
+    )
     JAWIS_WEBHOOK_URL: Optional[str] = Field(
         default=None,
         description="JAWIS's webhook receiver — JawCom POSTs email_sent/whatsapp_sent/delivered/read/clicked/"

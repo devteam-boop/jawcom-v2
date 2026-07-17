@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import StatusBadge from "@/components/StatusBadge";
+import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import {
   Rocket,
   Zap,
@@ -86,7 +87,7 @@ export default function CommunicationTimeline({ events = [] }) {
               aria-expanded={isOpen}
             >
               <div className="text-xs text-muted-foreground">
-                {event.occurred_at ? new Date(event.occurred_at).toLocaleString() : "—"}
+                {formatDateTimeWithRelative(event.occurred_at)}
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-sm font-medium">{meta.label}</span>

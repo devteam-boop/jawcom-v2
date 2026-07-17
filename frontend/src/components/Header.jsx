@@ -113,48 +113,18 @@ export default function Header({ onToggleSidebar, onOpenMobile }) {
               data-testid="header-notifications"
             >
               <Bell className="h-4 w-4" />
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-96">
             <div className="flex items-center justify-between px-2 py-1.5">
               <DropdownMenuLabel className="p-0">Notifications</DropdownMenuLabel>
-              <button className="text-[11px] font-medium text-primary hover:underline">Mark all read</button>
             </div>
             <DropdownMenuSeparator />
-            <div className="max-h-96 space-y-1 overflow-y-auto p-1 scrollbar-thin">
-              {[
-                { tone: "primary", title: "Priya Sharma replied on WhatsApp", body: "\"Yes, the proposal looks great…\"", time: "2m ago" },
-                { tone: "neutral", title: "Campaign 'Spring Promo 2026' sent", body: "Delivered to 248 contacts · 14.5% CTR", time: "12m ago" },
-                { tone: "primary", title: "AI suggested 3 new replies", body: "Open your inbox to review", time: "28m ago" },
-                { tone: "amber", title: "Workflow 'Negative sentiment alert' fired", body: "Lila Okafor — sentiment 0.21", time: "1h ago" },
-                { tone: "neutral", title: "Daniel Chen moved to Negotiation", body: "Stage updated by Maya", time: "3h ago" },
-                { tone: "rose", title: "Webhook failed · logs.northwind.co", body: "503 Service Unavailable · retrying", time: "Yesterday" },
-              ].map((n, i) => (
-                <div key={i} className="flex items-start gap-2 rounded-md p-2 hover:bg-secondary">
-                  <span
-                    className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                      n.tone === "primary"
-                        ? "bg-primary"
-                        : n.tone === "amber"
-                        ? "bg-amber-500"
-                        : n.tone === "rose"
-                        ? "bg-rose-500"
-                        : "bg-muted-foreground/40"
-                    }`}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{n.title}</div>
-                    <div className="truncate text-xs text-muted-foreground">{n.body}</div>
-                    <div className="mt-0.5 text-[10px] text-muted-foreground">{n.time}</div>
-                  </div>
-                </div>
-              ))}
+            {/* No notifications API exists yet — this used to show fake
+                demo items. See audit report: needs a backend endpoint. */}
+            <div className="px-3 py-6 text-center text-xs text-muted-foreground">
+              No notifications yet.
             </div>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="justify-center text-xs font-medium text-primary">
-              View all notifications
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
 

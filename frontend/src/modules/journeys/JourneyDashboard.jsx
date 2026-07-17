@@ -6,6 +6,7 @@ import StatusBadge from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { flowDefinitionService } from "@/services/flowDefinitions";
 import { integrationService } from "@/services/integrations";
+import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import {
   Activity,
   CheckCircle2,
@@ -155,13 +156,13 @@ export default function JourneyDashboard({
           <SummaryField label="Current Version" value={flowDef ? `v${flowDef.version}` : "—"} />
           <SummaryField
             label="Created At"
-            value={journey?.created_at ? new Date(journey.created_at).toLocaleString() : "—"}
+            value={formatDateTimeWithRelative(journey?.created_at)}
           />
           <SummaryField
             label="Last Published"
             value={
               flowDef?.status === "published"
-                ? new Date(flowDef.updated_at).toLocaleString()
+                ? formatDateTimeWithRelative(flowDef.updated_at)
                 : "Not yet published"
             }
           />

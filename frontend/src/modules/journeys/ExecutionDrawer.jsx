@@ -22,6 +22,7 @@ import { flowExecutionLogService } from "@/services/flowExecutionLogs";
 import { approvalService } from "@/services/approvals";
 import { taskService } from "@/services/tasks";
 import { communicationEventService } from "@/services/communicationEvents";
+import { formatDateTimeWithRelative, formatDate } from "@/lib/dateFormat";
 import CommunicationTimeline from "./CommunicationTimeline";
 import { toast } from "sonner";
 import {
@@ -33,6 +34,8 @@ import {
   ClipboardList,
   CheckCircle2,
   XCircle,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 
 export const INSTANCE_STATUS_TONE = {
@@ -164,10 +167,13 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
         node_type: log.input?.node_type || "",
         error_message: log.error_message,
         executed_at: log.executed_at || log.created_at,
+        raw: log,
       };
     });
     return Object.values(map);
   }, [logs]);
+
+  const [expandedNodeId, setExpandedNodeId] = useState(null);
 
   const failedLog = useMemo(() => logs.find((log) => log.status === "failed") || null, [logs]);
 
@@ -294,7 +300,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                       </p>
                     )}
                     <p className="mt-0.5 text-red-600 dark:text-red-400">
-                      <span className="font-medium">Time:</span> {failedLog.executed_at || "—"}
+                      <span className="font-medium">Time:</span> {formatDateTimeWithRelative(failedLog.executed_at)}
                     </p>
                   </div>
                 </div>
@@ -329,12 +335,12 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                 <MetaRow label="Status" value={row.autoStatus} />
                 <MetaRow label="Lead ID" value={String(row.lead_id)} />
                 <MetaRow label="Current Node" value={row.current_node_id || "—"} />
-                <MetaRow label="Started At" value={row.started_at || "—"} />
-                <MetaRow label="Completed At" value={row.completed_at || "—"} />
+                <MetaRow label="Started At" value={formatDateTimeWithRelative(row.started_at)} />
+                <MetaRow label="Completed At" value={formatDateTimeWithRelative(row.completed_at)} />
                 <MetaRow label="Duration" value={formatDuration(row.started_at, row.completed_at)} />
                 <MetaRow label="Health" value={row.health} />
                 {row.autoStatus === "waiting" && row.resume_at && (
-                  <MetaRow label="Resume At" value={row.resume_at} />
+                  <MetaRow label="Resume At" value={formatDateTimeWithRelative(row.resume_at)} />
                 )}
                 {row.autoStatus === "waiting_approval" && (
                   <MetaRow label="Paused For" value="Approval" />
@@ -349,11 +355,11 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                   <MetaRow label="Result" value="Completed successfully" />
                 )}
                 <Separator />
-                <div className="flex flex-col gap-1.5">
+                <div className="grid grid-cols-2 gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 justify-start text-xs"
+                    className="h-8 text-xs"
                     disabled={row.autoStatus !== "failed"}
                     onClick={() => handleRetry("node")}
                   >
@@ -362,7 +368,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 justify-start text-xs"
+                    className="h-8 text-xs"
                     disabled={row.autoStatus !== "waiting" && row.autoStatus !== "waiting_approval" && row.autoStatus !== "waiting_task"}
                     onClick={handleResume}
                   >
@@ -388,8 +394,8 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                         {a.description && <p className="mt-2 text-xs text-muted-foreground">{a.description}</p>}
                         <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                           <span>Approver: {a.approver || '—'}</span>
-                          <span>Created: {a.created_at ? new Date(a.created_at).toLocaleString() : '—'}</span>
-                          {a.resolved_at && <span>Resolved: {new Date(a.resolved_at).toLocaleString()}</span>}
+                          <span>Created: {formatDateTimeWithRelative(a.created_at)}</span>
+                          {a.resolved_at && <span>Resolved: {formatDateTimeWithRelative(a.resolved_at)}</span>}
                         </div>
                         {a.status === 'pending' && (
                           <div className="mt-3 flex gap-2">
@@ -427,9 +433,9 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                         {t.description && <p className="mt-2 text-xs text-muted-foreground">{t.description}</p>}
                         <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                           <span>Assignee: {t.assignee || '—'}</span>
-                          {t.due_date && <span>Due: {t.due_date}</span>}
-                          <span>Created: {t.created_at ? new Date(t.created_at).toLocaleString() : '—'}</span>
-                          {t.completed_at && <span>Completed: {new Date(t.completed_at).toLocaleString()}</span>}
+                          {t.due_date && <span>Due: {formatDate(t.due_date)}</span>}
+                          <span>Created: {formatDateTimeWithRelative(t.created_at)}</span>
+                          {t.completed_at && <span>Completed: {formatDateTimeWithRelative(t.completed_at)}</span>}
                         </div>
                         {t.status === 'pending' && (
                           <div className="mt-3 flex gap-2">
@@ -451,22 +457,47 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                 {nodeStatuses.length === 0 ? (
                   <div className="text-sm text-muted-foreground">No execution logs available.</div>
                 ) : (
-                  nodeStatuses.map((s, i) => (
-                    <div key={s.node_id || i} className="flex items-center gap-3 rounded-lg border border-border p-2.5">
-                      <span
-                        className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${NODE_STATUS_COLORS[s.status] || "bg-gray-400"}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium">{s.node_id}</span>
-                          {s.node_type && <Badge variant="outline" className="text-[10px]">{s.node_type}</Badge>}
-                        </div>
-                        {s.error_message && (
-                          <p className="mt-0.5 text-xs text-red-500">{s.error_message}</p>
+                  nodeStatuses.map((s, i) => {
+                    const key = s.node_id || i;
+                    const isOpen = expandedNodeId === key;
+                    return (
+                      <div key={key} className="rounded-lg border border-border">
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-3 p-2.5 text-left"
+                          onClick={() => setExpandedNodeId(isOpen ? null : key)}
+                        >
+                          <span className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${NODE_STATUS_COLORS[s.status] || "bg-gray-400"}`} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">{s.node_id}</span>
+                              {s.node_type && <Badge variant="outline" className="text-[10px]">{s.node_type}</Badge>}
+                            </div>
+                            {s.error_message && !isOpen && (
+                              <p className="mt-0.5 truncate text-xs text-red-500">{s.error_message}</p>
+                            )}
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">{formatDateTimeWithRelative(s.executed_at)}</p>
+                          </div>
+                          {isOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                        </button>
+                        {isOpen && (
+                          <div className="space-y-2 border-t border-border/60 p-2.5">
+                            {s.error_message && (
+                              <p className="text-xs text-red-500">{s.error_message}</p>
+                            )}
+                            <div>
+                              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Input</div>
+                              <pre className="max-h-40 overflow-auto rounded-md bg-secondary/40 p-2 text-[11px]">{JSON.stringify(s.raw?.input ?? {}, null, 2)}</pre>
+                            </div>
+                            <div>
+                              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Output / response</div>
+                              <pre className="max-h-40 overflow-auto rounded-md bg-secondary/40 p-2 text-[11px]">{JSON.stringify(s.raw?.output ?? {}, null, 2)}</pre>
+                            </div>
+                          </div>
                         )}
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </TabsContent>
 
@@ -481,7 +512,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                       return (
                         <li key={log.id || i} className="relative">
                           <span className={`absolute -left-[26px] top-1 flex h-3 w-3 items-center justify-center rounded-full border-2 border-background ${dotColor}`} />
-                          <div className="text-xs text-muted-foreground">{log.executed_at || log.created_at || "—"}</div>
+                          <div className="text-xs text-muted-foreground">{formatDateTimeWithRelative(log.executed_at || log.created_at)}</div>
                           <p className="flex items-center gap-1.5 text-sm font-medium">
                             {log.node_id}
                             {log.status && (

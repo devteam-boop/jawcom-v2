@@ -30,6 +30,8 @@ from app.api import (
     email_sync_router,
     lead_timeline_router,
     lead_journey_router,
+    auth_router,
+    ai_text_router,
 )
 from app.events.dispatcher import get_dispatcher
 from app.jawis.webhook import get_webhook_handler
@@ -90,6 +92,8 @@ app.include_router(debug_router)
 app.include_router(email_sync_router)
 app.include_router(lead_timeline_router)
 app.include_router(lead_journey_router)
+app.include_router(auth_router)
+app.include_router(ai_text_router)
 
 
 _scheduler = None

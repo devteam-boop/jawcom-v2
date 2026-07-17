@@ -1,5 +1,6 @@
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import { User } from "lucide-react";
 
 /**
@@ -38,7 +39,7 @@ export default function LeadDetailsCard({ leadId, instanceCount, eventCount, las
             </div>
             <div className="col-span-2">
               <div className="text-xs text-muted-foreground">Last Activity</div>
-              <div className="font-medium">{lastActivityAt ? new Date(lastActivityAt).toLocaleString() : "—"}</div>
+              <div className="font-medium">{formatDateTimeWithRelative(lastActivityAt)}</div>
             </div>
           </div>
         </div>

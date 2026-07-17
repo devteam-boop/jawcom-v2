@@ -88,21 +88,6 @@ export default function Sidebar({ collapsed, mobileOpen, onCloseMobile }) {
             );
           })}
         </nav>
-
-        {/* Bottom card */}
-        {!collapsed && (
-          <div className="border-t border-border p-3">
-            <div className="rounded-lg border border-border bg-secondary/40 p-3">
-              <div className="text-xs font-semibold">Growth Plan</div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground">
-                12,480 / 25,000 messages
-              </div>
-              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-background">
-                <div className="h-full w-1/2 rounded-full bg-primary" />
-              </div>
-            </div>
-          </div>
-        )}
       </aside>
     </>
   );

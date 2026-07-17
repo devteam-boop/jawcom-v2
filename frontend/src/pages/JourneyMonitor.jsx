@@ -28,6 +28,7 @@ import { JourneyList, useJourneys, ExecutionDrawer, INSTANCE_STATUS_TONE } from 
 import { runningInstanceService } from "@/services/runningInstances";
 import { journeyService } from "@/services/journeys";
 import { stageMappingService } from "@/services/stageMappings";
+import { formatRelative } from "@/lib/dateFormat";
 import { toast } from "sonner";
 import {
   Workflow,
@@ -35,8 +36,6 @@ import {
   Clock,
   RefreshCw,
 } from "lucide-react";
-
-const PRIORITIES = ["High", "Medium", "Low"];
 
 function toRow(instance, journeyMap) {
   const leadId = instance.lead_id || "";
@@ -48,30 +47,20 @@ function toRow(instance, journeyMap) {
     lead_id: instance.lead_id,
     name: `Lead #${leadId}`,
     initials: String(leadId).slice(0, 2).toUpperCase() || "??",
-    email: "",
-    phone: "",
-    company: "",
     stage: j?.status || "—",
     journey: j?.name || "Unknown",
     autoStatus: instance.status || "unknown",
     comms: instance.status === "running" ? "Open" : "Closed",
     health: instance.status === "completed" ? "Healthy" : instance.status === "failed" ? "Stalled" : "At Risk",
-    messagesSent: 0,
-    replies: 0,
-    pendingActions: 0,
-    owner: "—",
-    priority: PRIORITIES[Math.floor(Math.random() * PRIORITIES.length)],
     current_node_id: data.current_node_id || null,
     last_executed_at: data.last_executed_at || null,
     resume_at: data.resume_at || null,
     retry_count: data.retry_count || 0,
     started_at: instance.started_at || null,
     completed_at: instance.completed_at || null,
-    lastActivity: instance.updated_at || instance.created_at || "—",
-    aiSummary: "",
+    lastActivity: instance.updated_at || instance.created_at || null,
     healthTone: instance.status === "completed" ? "success" : instance.status === "failed" ? "danger" : "warning",
     data: data,
-    timeline: [],
   };
 }
 
@@ -262,7 +251,7 @@ export default function JourneyMonitor() {
         </span>
       ),
     },
-    { key: "lastActivity", label: "Last Activity", render: (r) => <span className="whitespace-nowrap text-xs text-muted-foreground">{r.lastActivity}</span> },
+    { key: "lastActivity", label: "Last Activity", render: (r) => <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelative(r.lastActivity)}</span> },
   ];
 
   if (loading) {

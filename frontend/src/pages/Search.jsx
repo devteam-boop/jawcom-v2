@@ -1,101 +1,174 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import PageHeader from "@/components/PageHeader";
 import SearchBar from "@/components/SearchBar";
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import StatusBadge from "@/components/StatusBadge";
 import EmptyState from "@/components/EmptyState";
-import { CONVERSATIONS, CUSTOMERS, CAMPAIGNS } from "@/dummy-data";
-import { COMPANIES } from "@/dummy-data/companies";
-import { KNOWLEDGE_DOCS } from "@/dummy-data/knowledge";
-import { Search, MessageSquare, Users, Building2, Megaphone, BookOpen } from "lucide-react";
+import { useConversations, useLeadSummaries, previewFor } from "@/modules/inbox";
+import { journeyService } from "@/services/journeys";
+import { templateService } from "@/services/templates";
+import { whatsappTemplateService } from "@/services/whatsappTemplates";
+import { formatRelative } from "@/lib/dateFormat";
+import { Search, MessageSquare, Users, Workflow, FileText, Megaphone } from "lucide-react";
 
+const PAGE_SIZE = 8;
+
+/**
+ * Real, live search across everything that has a queryable API:
+ * conversations + individual messages (communication_events, via the
+ * existing useConversations hook — same data Inbox uses), contacts (lead
+ * summaries already cached for visible conversations), journeys, and
+ * templates (generic + WhatsApp). Reuses existing list queries client-side
+ * — no new backend endpoint (a real cross-entity search API would need one,
+ * flagged in the Phase 3 report rather than built here).
+ *
+ * Company search and full contact search (by phone/email across ALL
+ * leads, not just ones with existing conversations) are NOT possible —
+ * JAWIS exposes no search endpoint, only single-lead-by-id lookup (see
+ * Phase 2 report). Campaign search is empty — no campaign data exists
+ * (Phase 3 report: the Campaign/Workspace models are broken scaffolding).
+ */
 export default function SearchPage() {
   const [params, setParams] = useSearchParams();
-  const initial = params.get("q") || "";
-  const [query, setQuery] = useState(initial);
+  const [query, setQuery] = useState(params.get("q") || "");
+  const [pages, setPages] = useState({});
+
+  const { conversations } = useConversations();
+  const leadIds = useMemo(() => conversations.map((c) => c.leadId), [conversations]);
+  const leadSummaries = useLeadSummaries(leadIds);
+
+  const [journeys, setJourneys] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [waTemplates, setWaTemplates] = useState([]);
+
+  useEffect(() => {
+    journeyService.list({ limit: 200 }).then(setJourneys).catch(() => setJourneys([]));
+    templateService.list({ limit: 200 }).then(setTemplates).catch(() => setTemplates([]));
+    whatsappTemplateService.list().then(setWaTemplates).catch(() => setWaTemplates([]));
+  }, []);
 
   const q = query.toLowerCase().trim();
 
   const results = useMemo(() => {
-    if (!q) {
-      return { conversations: [], customers: [], companies: [], campaigns: [], knowledge: [] };
-    }
-    return {
-      conversations: CONVERSATIONS.filter((c) => `${c.customer} ${c.company} ${c.preview}`.toLowerCase().includes(q)).slice(0, 8),
-      customers: CUSTOMERS.filter((c) => `${c.name} ${c.email} ${c.company}`.toLowerCase().includes(q)).slice(0, 8),
-      companies: COMPANIES.filter((c) => `${c.name} ${c.industry} ${c.primary}`.toLowerCase().includes(q)).slice(0, 8),
-      campaigns: CAMPAIGNS.filter((c) => `${c.name} ${c.channel}`.toLowerCase().includes(q)).slice(0, 8),
-      knowledge: KNOWLEDGE_DOCS.filter((d) => `${d.title} ${d.source} ${d.type}`.toLowerCase().includes(q)).slice(0, 8),
-    };
-  }, [q]);
+    if (!q) return { conversations: [], messages: [], contacts: [], journeys: [], templates: [] };
+
+    const matchedConversations = conversations.filter((c) => {
+      const name = leadSummaries[c.leadId]?.name || "";
+      const hay = `${c.leadId} ${name} ${leadSummaries[c.leadId]?.email || ""} ${leadSummaries[c.leadId]?.phone || ""}`.toLowerCase();
+      return hay.includes(q) || c.events.some((e) => `${e.payload?.subject || ""} ${e.payload?.body || ""}`.toLowerCase().includes(q));
+    });
+
+    const messages = conversations
+      .flatMap((c) => c.events.map((e) => ({ ...e, leadId: c.leadId })))
+      .filter((e) => `${e.payload?.subject || ""} ${e.payload?.body || ""} ${e.event_type}`.toLowerCase().includes(q))
+      .sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at));
+
+    const contacts = conversations.filter((c) => {
+      const s = leadSummaries[c.leadId];
+      if (!s) return String(c.leadId).includes(q);
+      return `${s.name} ${s.email || ""} ${s.phone || ""} ${c.leadId}`.toLowerCase().includes(q);
+    });
+
+    const matchedJourneys = journeys.filter((j) => `${j.name} ${j.description || ""}`.toLowerCase().includes(q));
+
+    const matchedTemplates = [
+      ...templates.map((t) => ({ ...t, kind: "generic" })),
+      ...waTemplates.map((t) => ({ ...t, name: t.template_name, kind: "whatsapp" })),
+    ].filter((t) => `${t.name} ${t.content || t.body || ""}`.toLowerCase().includes(q));
+
+    return { conversations: matchedConversations, messages, contacts, journeys: matchedJourneys, templates: matchedTemplates };
+  }, [q, conversations, leadSummaries, journeys, templates, waTemplates]);
 
   const total = Object.values(results).reduce((acc, arr) => acc + arr.length, 0);
 
   const update = (v) => {
     setQuery(v);
+    setPages({});
     setParams(v ? { q: v } : {});
   };
+
+  const pageFor = (key) => pages[key] || 1;
+  const showMore = (key) => setPages((p) => ({ ...p, [key]: (p[key] || 1) + 1 }));
 
   return (
     <div data-testid="page-search">
       <PageHeader
         title="Search"
-        description={q ? `${total} result${total === 1 ? "" : "s"} for "${q}"` : "Search across your entire workspace."}
+        description={q ? `${total} result${total === 1 ? "" : "s"} for "${q}"` : "Search across conversations, messages, contacts, journeys and templates."}
       />
 
       <div className="space-y-5 px-4 py-6 md:px-8">
         <SearchBar
           value={query}
           onChange={update}
-          placeholder="Search customers, companies, conversations, campaigns, docs…"
+          placeholder="Search conversations, messages, contacts, journeys, templates…"
           className="max-w-2xl"
           testId="global-search-input"
         />
 
         {!q ? (
-          <EmptyState
-            icon={Search}
-            title="Start typing to search"
-            description="JawCom searches across people, accounts, conversations, campaigns and your knowledge base."
-          />
+          <EmptyState icon={Search} title="Start typing to search" description="Company and campaign search aren't available yet — see the Phase 3 report." />
         ) : total === 0 ? (
-          <EmptyState
-            icon={Search}
-            title={`No matches for "${q}"`}
-            description="Try a different keyword or check your filters."
-          />
+          <EmptyState icon={Search} title={`No matches for "${q}"`} description="Try a different keyword." />
         ) : (
           <Tabs defaultValue="all" className="w-full">
             <TabsList className="mb-4 flex w-full justify-start overflow-x-auto scrollbar-thin">
-              <TabsTrigger value="all" className="text-xs">All <span className="ml-1.5 rounded bg-secondary px-1 text-[10px] font-semibold">{total}</span></TabsTrigger>
-              <TabsTrigger value="conversations" className="text-xs">Conv. <span className="ml-1.5 rounded bg-secondary px-1 text-[10px] font-semibold">{results.conversations.length}</span></TabsTrigger>
-              <TabsTrigger value="customers" className="text-xs">People <span className="ml-1.5 rounded bg-secondary px-1 text-[10px] font-semibold">{results.customers.length}</span></TabsTrigger>
-              <TabsTrigger value="companies" className="text-xs">Companies <span className="ml-1.5 rounded bg-secondary px-1 text-[10px] font-semibold">{results.companies.length}</span></TabsTrigger>
-              <TabsTrigger value="campaigns" className="text-xs">Camp. <span className="ml-1.5 rounded bg-secondary px-1 text-[10px] font-semibold">{results.campaigns.length}</span></TabsTrigger>
-              <TabsTrigger value="knowledge" className="text-xs">Docs <span className="ml-1.5 rounded bg-secondary px-1 text-[10px] font-semibold">{results.knowledge.length}</span></TabsTrigger>
+              <TabsTrigger value="all" className="text-xs">All <Count n={total} /></TabsTrigger>
+              <TabsTrigger value="conversations" className="text-xs">Conversations <Count n={results.conversations.length} /></TabsTrigger>
+              <TabsTrigger value="messages" className="text-xs">Messages <Count n={results.messages.length} /></TabsTrigger>
+              <TabsTrigger value="contacts" className="text-xs">Contacts <Count n={results.contacts.length} /></TabsTrigger>
+              <TabsTrigger value="journeys" className="text-xs">Journeys <Count n={results.journeys.length} /></TabsTrigger>
+              <TabsTrigger value="templates" className="text-xs">Templates <Count n={results.templates.length} /></TabsTrigger>
             </TabsList>
 
             <TabsContent value="all" className="space-y-5">
-              {results.conversations.length > 0 && <Section icon={MessageSquare} title="Conversations" to="/conversations">{results.conversations.map((c) => <ConvRow key={c.id} c={c} />)}</Section>}
-              {results.customers.length > 0 && <Section icon={Users} title="People" to="/contacts">{results.customers.map((c) => <PersonRow key={c.id} c={c} />)}</Section>}
-              {results.companies.length > 0 && <Section icon={Building2} title="Companies" to="/contacts">{results.companies.map((c) => <CompanyRow key={c.id} c={c} />)}</Section>}
-              {results.campaigns.length > 0 && <Section icon={Megaphone} title="Campaigns" to="/campaigns">{results.campaigns.map((c) => <CampaignRow key={c.id} c={c} />)}</Section>}
-              {results.knowledge.length > 0 && <Section icon={BookOpen} title="Knowledge" to="/knowledge">{results.knowledge.map((d) => <DocRow key={d.id} d={d} />)}</Section>}
+              {results.contacts.length > 0 && <Section icon={Users} title="Contacts" to="/contacts">{paginate(results.contacts, 1, PAGE_SIZE).map((c) => <ContactRow key={c.leadId} c={c} summary={leadSummaries[c.leadId]} />)}</Section>}
+              {results.conversations.length > 0 && <Section icon={MessageSquare} title="Conversations" to="/conversations">{paginate(results.conversations, 1, PAGE_SIZE).map((c) => <ConvRow key={c.leadId} c={c} summary={leadSummaries[c.leadId]} />)}</Section>}
+              {results.journeys.length > 0 && <Section icon={Workflow} title="Journeys" to="/journeys">{paginate(results.journeys, 1, PAGE_SIZE).map((j) => <JourneyRow key={j.id} j={j} />)}</Section>}
+              {results.templates.length > 0 && <Section icon={FileText} title="Templates" to="/templates">{paginate(results.templates, 1, PAGE_SIZE).map((t) => <TemplateRow key={t.id} t={t} />)}</Section>}
+              <EmptyState icon={Megaphone} title="Campaigns not searchable" description="No campaign engine exists yet — see the Phase 3 report." className="border-none bg-transparent p-4" />
             </TabsContent>
 
-            <TabsContent value="conversations">{results.conversations.map((c) => <ConvRow key={c.id} c={c} />)}</TabsContent>
-            <TabsContent value="customers">{results.customers.map((c) => <PersonRow key={c.id} c={c} />)}</TabsContent>
-            <TabsContent value="companies">{results.companies.map((c) => <CompanyRow key={c.id} c={c} />)}</TabsContent>
-            <TabsContent value="campaigns">{results.campaigns.map((c) => <CampaignRow key={c.id} c={c} />)}</TabsContent>
-            <TabsContent value="knowledge">{results.knowledge.map((d) => <DocRow key={d.id} d={d} />)}</TabsContent>
+            <TabsContent value="conversations" className="space-y-2">
+              {paginate(results.conversations, pageFor("conversations"), PAGE_SIZE).map((c) => <ConvRow key={c.leadId} c={c} summary={leadSummaries[c.leadId]} />)}
+              {results.conversations.length > pageFor("conversations") * PAGE_SIZE && <MoreButton onClick={() => showMore("conversations")} />}
+            </TabsContent>
+            <TabsContent value="messages" className="space-y-2">
+              {paginate(results.messages, pageFor("messages"), PAGE_SIZE).map((e) => <MessageRow key={e.id} e={e} />)}
+              {results.messages.length > pageFor("messages") * PAGE_SIZE && <MoreButton onClick={() => showMore("messages")} />}
+            </TabsContent>
+            <TabsContent value="contacts" className="space-y-2">
+              {paginate(results.contacts, pageFor("contacts"), PAGE_SIZE).map((c) => <ContactRow key={c.leadId} c={c} summary={leadSummaries[c.leadId]} />)}
+              {results.contacts.length > pageFor("contacts") * PAGE_SIZE && <MoreButton onClick={() => showMore("contacts")} />}
+            </TabsContent>
+            <TabsContent value="journeys" className="space-y-2">
+              {paginate(results.journeys, pageFor("journeys"), PAGE_SIZE).map((j) => <JourneyRow key={j.id} j={j} />)}
+              {results.journeys.length > pageFor("journeys") * PAGE_SIZE && <MoreButton onClick={() => showMore("journeys")} />}
+            </TabsContent>
+            <TabsContent value="templates" className="space-y-2">
+              {paginate(results.templates, pageFor("templates"), PAGE_SIZE).map((t) => <TemplateRow key={t.id} t={t} />)}
+              {results.templates.length > pageFor("templates") * PAGE_SIZE && <MoreButton onClick={() => showMore("templates")} />}
+            </TabsContent>
           </Tabs>
         )}
       </div>
     </div>
   );
+}
+
+function paginate(arr, page, size) {
+  return arr.slice(0, page * size);
+}
+
+function Count({ n }) {
+  return <span className="ml-1.5 rounded bg-secondary px-1 text-[10px] font-semibold">{n}</span>;
+}
+
+function MoreButton({ onClick }) {
+  return <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onClick}>Show more</Button>;
 }
 
 function Section({ icon: Icon, title, to, children }) {
@@ -113,71 +186,64 @@ function Section({ icon: Icon, title, to, children }) {
   );
 }
 
-function ConvRow({ c }) {
+function ConvRow({ c, summary }) {
   return (
-    <div className="flex items-center gap-3 px-2 py-2.5">
-      <Avatar className="h-8 w-8">
-        <AvatarFallback className="bg-primary/10 text-[11px] font-semibold text-primary">{c.initials}</AvatarFallback>
-      </Avatar>
+    <Link to={`/conversations?lead=${c.leadId}`} className="flex items-center gap-3 px-2 py-2.5 hover:bg-secondary/50">
+      <Avatar className="h-8 w-8"><AvatarFallback className="bg-primary/10 text-[11px] font-semibold text-primary">{String(c.leadId).slice(0, 2)}</AvatarFallback></Avatar>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">{c.customer} · {c.company}</div>
-        <div className="truncate text-xs text-muted-foreground">{c.preview}</div>
+        <div className="truncate text-sm font-semibold">{summary?.name || `Lead #${c.leadId}`}</div>
+        <div className="truncate text-xs text-muted-foreground">{previewFor(c.latestEvent)}</div>
       </div>
-      <StatusBadge status={c.status} />
-    </div>
+      <span className="shrink-0 text-[11px] text-muted-foreground">{formatRelative(c.lastActivityAt)}</span>
+    </Link>
   );
 }
 
-function PersonRow({ c }) {
+function MessageRow({ e }) {
   return (
-    <div className="flex items-center gap-3 px-2 py-2.5">
-      <Avatar className="h-8 w-8">
-        <AvatarFallback className="bg-primary/10 text-[11px] font-semibold text-primary">{c.initials}</AvatarFallback>
-      </Avatar>
+    <Link to={`/conversations?lead=${e.leadId}`} className="flex items-center gap-3 px-2 py-2.5 hover:bg-secondary/50">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary"><MessageSquare className="h-3.5 w-3.5" /></div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">{c.name}</div>
-        <div className="truncate text-xs text-muted-foreground">{c.email}</div>
+        <div className="truncate text-sm font-semibold">Lead #{e.leadId} · {e.event_type.replace(/_/g, " ")}</div>
+        <div className="truncate text-xs text-muted-foreground">{e.payload?.body || e.payload?.subject || "—"}</div>
       </div>
-      <StatusBadge status={c.status} />
-    </div>
+      <span className="shrink-0 text-[11px] text-muted-foreground">{formatRelative(e.occurred_at)}</span>
+    </Link>
   );
 }
 
-function CompanyRow({ c }) {
+function ContactRow({ c, summary }) {
   return (
-    <div className="flex items-center gap-3 px-2 py-2.5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10 text-[11px] font-bold text-primary">{c.logo}</div>
+    <Link to={`/conversations?lead=${c.leadId}`} className="flex items-center gap-3 px-2 py-2.5 hover:bg-secondary/50">
+      <Avatar className="h-8 w-8"><AvatarFallback className="bg-primary/10 text-[11px] font-semibold text-primary">{String(c.leadId).slice(0, 2)}</AvatarFallback></Avatar>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">{c.name}</div>
-        <div className="truncate text-xs text-muted-foreground">{c.industry} · {c.primary}</div>
+        <div className="truncate text-sm font-semibold">{summary?.name || `Lead #${c.leadId}`}</div>
+        <div className="truncate text-xs text-muted-foreground">{summary?.email || summary?.phone || "—"}</div>
       </div>
-      <StatusBadge status={c.stage} />
-    </div>
+    </Link>
   );
 }
 
-function CampaignRow({ c }) {
+function JourneyRow({ j }) {
   return (
-    <div className="flex items-center gap-3 px-2 py-2.5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-secondary"><Megaphone className="h-3.5 w-3.5" /></div>
+    <Link to="/journeys" className="flex items-center gap-3 px-2 py-2.5 hover:bg-secondary/50">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary"><Workflow className="h-3.5 w-3.5" /></div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">{c.name}</div>
-        <div className="truncate text-xs text-muted-foreground">{c.channel} · {c.audience.toLocaleString()} contacts</div>
+        <div className="truncate text-sm font-semibold">{j.name}</div>
+        <div className="truncate text-xs text-muted-foreground">{j.status}</div>
       </div>
-      <StatusBadge status={c.status} />
-    </div>
+    </Link>
   );
 }
 
-function DocRow({ d }) {
+function TemplateRow({ t }) {
   return (
-    <div className="flex items-center gap-3 px-2 py-2.5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-secondary"><BookOpen className="h-3.5 w-3.5" /></div>
+    <Link to={t.kind === "whatsapp" ? "/templates/whatsapp" : "/templates"} className="flex items-center gap-3 px-2 py-2.5 hover:bg-secondary/50">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-secondary"><FileText className="h-3.5 w-3.5" /></div>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold">{d.title}</div>
-        <div className="truncate text-xs text-muted-foreground">{d.type} · {d.source}</div>
+        <div className="truncate text-sm font-semibold">{t.name}</div>
+        <div className="truncate text-xs text-muted-foreground">{t.channel || "whatsapp"}</div>
       </div>
-      {d.aiReady && <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">AI Ready</span>}
-    </div>
+    </Link>
   );
 }

@@ -2,6 +2,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
 import EmptyState from "@/components/EmptyState";
+import { formatDateTimeWithRelative, formatDate } from "@/lib/dateFormat";
 import { ClipboardList, ExternalLink } from "lucide-react";
 
 const STATUS_TONE = { completed: "success", rejected: "danger", pending: "warning" };
@@ -54,8 +55,8 @@ export default function LeadTasksList({ tasks = [], onOpenInstance }) {
           {t.description && <p className="mt-1.5 text-xs text-muted-foreground">{t.description}</p>}
           <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
             <span>Assignee: {t.assignee || "—"}</span>
-            {t.due_date && <span>Due: {t.due_date}</span>}
-            <span>Created: {t.created_at ? new Date(t.created_at).toLocaleString() : "—"}</span>
+            {t.due_date && <span>Due: {formatDate(t.due_date)}</span>}
+            <span>Created: {formatDateTimeWithRelative(t.created_at)}</span>
           </div>
         </Card>
       ))}

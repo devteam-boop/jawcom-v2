@@ -33,10 +33,12 @@ export const api = {
     return handleResponse(res);
   },
 
-  post: async (path, body) => {
+  post: async (path, body, { token } = {}) => {
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(`${BASE_URL}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
     });
     return handleResponse(res);

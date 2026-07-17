@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import EmptyState from "@/components/EmptyState";
+import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import { StickyNote, ExternalLink } from "lucide-react";
 
 /**
@@ -58,7 +59,7 @@ export default function LeadNotesList({ events = [], onOpenInstance }) {
             )}
           </div>
           <div className="mt-1.5 text-xs text-muted-foreground">
-            {note.occurred_at ? new Date(note.occurred_at).toLocaleString() : "—"}
+            {formatDateTimeWithRelative(note.occurred_at)}
           </div>
         </Card>
       ))}

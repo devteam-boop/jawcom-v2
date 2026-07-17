@@ -1,21 +1,22 @@
-import ChartCard from "@/components/ChartCard";
-import StatCard from "@/components/StatCard";
-import { Send, CheckCircle2, Eye, Reply, AlertTriangle } from "lucide-react";
+import EmptyState from "@/components/EmptyState";
+import { Send } from "lucide-react";
 
+/**
+ * reportService.delivery() targets /api/reports/delivery, which has no
+ * backend router (no app/api/report_routes.py, nothing registered in
+ * main.py). Real delivery/read/reply/failed counts already exist and are
+ * derivable from GET /api/communication-events, but building that
+ * aggregation is a Phase 2/3 reports API, not a Phase 1 foundation fix —
+ * flagged here rather than faked. Dashboard.jsx computes an equivalent
+ * (approximate, recent-window) delivery/read/reply rate client-side in the
+ * meantime.
+ */
 export default function DeliveryReport() {
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-        <StatCard label="Total Sent" value="12,480" icon={Send} />
-        <StatCard label="Delivered" value="11,980" icon={CheckCircle2} />
-        <StatCard label="Read" value="8,420" icon={Eye} />
-        <StatCard label="Replies" value="2,140" icon={Reply} />
-        <StatCard label="Failed" value="500" icon={AlertTriangle} />
-      </div>
-
-      <ChartCard title="Delivery by Channel" description="Sent, delivered, read, replied">
-        <div className="text-sm text-muted-foreground">Channel delivery breakdown will appear here.</div>
-      </ChartCard>
-    </div>
+    <EmptyState
+      icon={Send}
+      title="No delivery reporting API yet"
+      description="/api/reports/delivery does not exist on the backend yet. See the Dashboard for an approximate delivery/read/reply rate computed from recent communication events."
+    />
   );
 }

@@ -1,21 +1,17 @@
-import ChartCard from "@/components/ChartCard";
-import StatCard from "@/components/StatCard";
-import { Send, Eye, Reply, MousePointerClick, TrendingUp } from "lucide-react";
+import EmptyState from "@/components/EmptyState";
+import { TrendingUp } from "lucide-react";
 
+/**
+ * reportService.campaignAnalytics() targets /api/reports/campaigns/{id},
+ * which has no backend router — and there is no campaign engine at all yet
+ * (see Campaigns.jsx). This stays an empty state until both exist.
+ */
 export default function CampaignAnalytics() {
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
-        <StatCard label="Total Sent" value="8,240" icon={Send} />
-        <StatCard label="Open Rate" value="68%" icon={Eye} />
-        <StatCard label="Reply Rate" value="18%" icon={Reply} />
-        <StatCard label="CTR" value="14.5%" icon={MousePointerClick} />
-        <StatCard label="Conversion" value="8.2%" icon={TrendingUp} />
-      </div>
-
-      <ChartCard title="Campaign Funnel" description="Delivery → Open → Reply → Conversion">
-        <div className="text-sm text-muted-foreground">Campaign analytics funnel chart will appear here.</div>
-      </ChartCard>
-    </div>
+    <EmptyState
+      icon={TrendingUp}
+      title="No campaign analytics API yet"
+      description="/api/reports/campaigns does not exist on the backend yet, and there is no campaign engine to report on either. Phase 2/3 work."
+    />
   );
 }

@@ -3,6 +3,7 @@ import DataTable from "@/components/DataTable";
 import StatusBadge from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Clock, Pause, Play, XCircle } from "lucide-react";
+import { formatRelative } from "@/lib/dateFormat";
 import ExecutionDrawer from "./ExecutionDrawer";
 
 const statusTone = {
@@ -65,7 +66,7 @@ export default function RunningInstances({ instances = [], journeyMap = {}, onRe
     {
       key: "started_at",
       label: "Started",
-      render: (r) => <span className="text-xs text-muted-foreground">{r.started_at || "—"}</span>,
+      render: (r) => <span className="text-xs text-muted-foreground">{formatRelative(r.started_at)}</span>,
     },
     {
       key: "actions",

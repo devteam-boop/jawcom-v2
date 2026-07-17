@@ -26,6 +26,7 @@ import { useTemplates } from "@/modules/templates";
 import { templateService } from "@/services/templates";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import { toast } from "sonner";
 import {
   Plus,
@@ -367,8 +368,8 @@ export default function Templates() {
                 <TabsContent value="meta" className="mt-3 space-y-2">
                   <Row label="Channel" value={selected.channel} />
                   <Row label="Status" value={(STATUS_META[selected.status] || STATUS_META.draft).badge} />
-                  <Row label="Created" value={selected.created_at ? new Date(selected.created_at).toLocaleString() : "—"} />
-                  <Row label="Updated" value={selected.updated_at ? new Date(selected.updated_at).toLocaleString() : "—"} />
+                  <Row label="Created" value={formatDateTimeWithRelative(selected.created_at)} />
+                  <Row label="Updated" value={formatDateTimeWithRelative(selected.updated_at)} />
                 </TabsContent>
               </Tabs>
 

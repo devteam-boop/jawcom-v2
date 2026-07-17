@@ -3,6 +3,7 @@ import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
+import { formatRelative } from "@/lib/dateFormat";
 import ChannelBadge from "./ChannelBadge";
 import { previewFor } from "./conversationPreview";
 import { isConversationUnread } from "./unreadTracker";
@@ -18,14 +19,18 @@ const FILTERS = [
  * has activity for that lead as small badges, rather than splitting the
  * list by channel.
  */
-export default function ConversationList({ conversations, selectedLeadId, onSelect, search, onSearchChange, filter, onFilterChange }) {
+export default function ConversationList({ conversations, selectedLeadId, onSelect, search, onSearchChange, filter, onFilterChange, leadSummaries = {} }) {
   const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
     return conversations.filter((c) => {
       if (filter === "unread" && !isConversationUnread(c.leadId, c.lastActivityAt)) return false;
-      if (search && !String(c.leadId).includes(search.trim())) return false;
+      if (q) {
+        const name = leadSummaries[c.leadId]?.name || "";
+        if (!String(c.leadId).includes(q) && !name.toLowerCase().includes(q)) return false;
+      }
       return true;
     });
-  }, [conversations, filter, search]);
+  }, [conversations, filter, search, leadSummaries]);
 
   const unreadCount = useMemo(
     () => conversations.filter((c) => isConversationUnread(c.leadId, c.lastActivityAt)).length,
@@ -57,6 +62,10 @@ export default function ConversationList({ conversations, selectedLeadId, onSele
           filtered.map((c) => {
             const active = c.leadId === selectedLeadId;
             const unread = isConversationUnread(c.leadId, c.lastActivityAt);
+            const name = leadSummaries[c.leadId]?.name || `Lead #${c.leadId}`;
+            const initials = leadSummaries[c.leadId]?.name
+              ? leadSummaries[c.leadId].name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase()
+              : String(c.leadId).slice(0, 2);
             return (
               <button
                 key={c.leadId}
@@ -70,7 +79,7 @@ export default function ConversationList({ conversations, selectedLeadId, onSele
                 <div className="relative shrink-0">
                   <Avatar className="h-10 w-10">
                     <AvatarFallback className="bg-primary/10 text-xs font-semibold text-primary">
-                      {String(c.leadId).slice(0, 2)}
+                      {initials}
                     </AvatarFallback>
                   </Avatar>
                   {unread && (
@@ -83,9 +92,9 @@ export default function ConversationList({ conversations, selectedLeadId, onSele
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-semibold">Lead #{c.leadId}</span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {c.lastActivityAt ? new Date(c.lastActivityAt).toLocaleString() : "—"}
+                    <span className="truncate text-sm font-semibold">{name}</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground" title={c.lastActivityAt || undefined}>
+                      {formatRelative(c.lastActivityAt)}
                     </span>
                   </div>
                   <p className={cn("mt-1 line-clamp-1 text-xs", unread ? "font-medium text-foreground" : "text-muted-foreground")}>

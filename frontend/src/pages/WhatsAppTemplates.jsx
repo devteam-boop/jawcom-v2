@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { whatsappTemplateService } from "@/services/whatsappTemplates";
 import { cn } from "@/lib/utils";
+import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import { toast } from "sonner";
 import {
   Plus,
@@ -248,7 +249,7 @@ export default function WhatsAppTemplates() {
       <div className="flex items-center justify-between px-4 py-2 text-xs text-muted-foreground md:px-8">
         <span>
           Last synced:{" "}
-          {syncStatus.last_synced_at ? new Date(syncStatus.last_synced_at).toLocaleString() : "never"}
+          {syncStatus.last_synced_at ? formatDateTimeWithRelative(syncStatus.last_synced_at) : "never"}
         </span>
         {syncStatus.last_error && (
           <span className="flex items-center gap-1 text-rose-600 dark:text-rose-400">
@@ -536,7 +537,7 @@ function TemplateRow({ template, onSubmit, submitting }) {
         <Row label="Quality rating" value={template.quality_rating || "—"} />
         <Row
           label="Last synced"
-          value={template.last_synced_at ? new Date(template.last_synced_at).toLocaleString() : "never"}
+          value={template.last_synced_at ? formatDateTimeWithRelative(template.last_synced_at) : "never"}
         />
         <Row label="Variables" value={template.variables?.length ? template.variables.join(", ") : "none"} />
       </div>
