@@ -7,18 +7,21 @@ import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import { jawisService } from "@/services/jawis";
 import { runningInstanceService } from "@/services/runningInstances";
 import { journeyService } from "@/services/journeys";
-import { CommunicationTimeline } from "@/modules/journeys";
 import ChannelBadge from "./ChannelBadge";
+import ChatThread from "./ChatThread";
 import MessageComposer from "./MessageComposer";
 import { markConversationSeen } from "./unreadTracker";
 import { MessagesSquare, ExternalLink, Phone, Mail } from "lucide-react";
 
 /**
  * The full thread view: header (real lead identity + journey status),
- * the shared CommunicationTimeline (same component ExecutionDrawer/Lead
- * Activity use — never duplicated), and a live composer. Manual sends are
- * merged in optimistically (Phase 2 Task 4) until the next poll brings back
- * the real communication_events row with the same id.
+ * a WhatsApp-Business-style chat rendering of the same communication_events
+ * CommunicationTimeline reads (see ChatThread.jsx — the Inbox-specific
+ * display; CommunicationTimeline itself is untouched and still used as the
+ * technical/debug log in ExecutionDrawer and Lead Activity), and a live
+ * composer. Manual sends are merged in optimistically (Phase 2 Task 4)
+ * until the next poll brings back the real communication_events row with
+ * the same id.
  */
 export default function ConversationThread({ conversation }) {
   const leadId = conversation?.leadId;
@@ -127,7 +130,7 @@ export default function ConversationThread({ conversation }) {
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin bg-secondary/10 p-6">
-        <CommunicationTimeline events={events} />
+        <ChatThread events={events} />
       </div>
 
       <MessageComposer leadId={leadId} leadStage={leadSummary?.stage} onSent={handleSent} />
