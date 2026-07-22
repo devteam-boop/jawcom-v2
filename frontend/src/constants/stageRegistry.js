@@ -13,10 +13,10 @@
  * doing so would silently break them. `label` is presentation-only and
  * safe to change at any time without touching stored data.
  *
- * Order here is the literal dropdown order — matches the NextMoveIn/JAWIS
- * pipeline: New -> Follow-Up -> Qualified -> Demand Requirement Created ->
- * Options Shared -> Site Visit Scheduled -> Site Visit Completed ->
- * Proposal Shared -> Negotiation -> Won -> Lost.
+ * Order here is the literal dropdown order — matches the current
+ * NextMoveIn/JAWIS pipeline: New -> Follow-Up -> Qualified -> Options
+ * Shared -> Site Visit Scheduled -> Site Visit Completed -> Negotiation
+ * -> Won -> Lost.
  */
 export const STAGES = [
   { value: "new", label: "New" },
@@ -24,14 +24,12 @@ export const STAGES = [
   // display label changed (was "Contacted").
   { value: "contacted", label: "Follow-Up" },
   { value: "qualified", label: "Qualified" },
-  // New NextMoveIn demand stages — additive, no existing journey/
+  // NextMoveIn demand stages — additive, no existing journey/
   // stage_mapping references these keys yet, so nothing executes for them
   // until a journey is actually wired to one.
-  { value: "demand_requirement_created", label: "Demand Requirement Created" },
   { value: "options_shared", label: "Options Shared" },
   { value: "site_visit_scheduled", label: "Site Visit Scheduled" },
   { value: "site_visit_completed", label: "Site Visit Completed" },
-  { value: "proposal_shared", label: "Proposal Shared" },
   { value: "negotiation", label: "Negotiation" },
   { value: "won", label: "Won" },
   { value: "lost", label: "Lost" },
