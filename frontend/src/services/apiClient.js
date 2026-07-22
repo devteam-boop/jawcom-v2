@@ -27,9 +27,20 @@ async function handleResponse(res) {
     // GET /api/auth/me 401 is the expected result of AuthContext's
     // "am I logged in?" probe on every fresh page load with no session
     // yet — not a real failure, so it's the one case that doesn't get
-    // logged as a console error.
+    // logged at all.
     const isSessionProbe = res.status === 401 && res.url.includes("/api/auth/me");
-    if (!isSessionProbe) {
+    // 404 is routinely part of normal control flow here, not a backend
+    // problem — a not-yet-built feature (e.g. GET /api/campaigns, caught
+    // by Campaigns.jsx to show an honest empty state) or a resource that
+    // legitimately doesn't exist (e.g. GET /api/leads/{id}/summary for a
+    // deleted lead, caught by useLeadSummaries). console.error is for
+    // things that indicate an actual bug; console.warn keeps these
+    // visible for debugging without tripping "no console errors" checks.
+    if (isSessionProbe) {
+      // no log at all
+    } else if (res.status === 404) {
+      console.warn(`API ${res.status} ${res.url}:`, body);
+    } else {
       console.error(`API ${res.status} ${res.url}:`, body);
     }
     if (res.status === 401 && !res.url.includes("/api/auth/login") && !isSessionProbe) {
