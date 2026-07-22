@@ -24,8 +24,15 @@ function readCsrfCookie() {
 async function handleResponse(res) {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
-    console.error(`API ${res.status} ${res.url}:`, body);
-    if (res.status === 401 && !res.url.includes("/api/auth/login")) {
+    // GET /api/auth/me 401 is the expected result of AuthContext's
+    // "am I logged in?" probe on every fresh page load with no session
+    // yet — not a real failure, so it's the one case that doesn't get
+    // logged as a console error.
+    const isSessionProbe = res.status === 401 && res.url.includes("/api/auth/me");
+    if (!isSessionProbe) {
+      console.error(`API ${res.status} ${res.url}:`, body);
+    }
+    if (res.status === 401 && !res.url.includes("/api/auth/login") && !isSessionProbe) {
       // Session expired/invalid on an otherwise-protected call — let
       // AuthContext react (redirect to /login) without every caller
       // having to special-case this.
