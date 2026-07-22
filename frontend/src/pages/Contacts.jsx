@@ -11,7 +11,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useConversations, useLeadSummaries, previewFor, ChannelBadge } from "@/modules/inbox";
 import { runningInstanceService } from "@/services/runningInstances";
 import { journeyService } from "@/services/journeys";
-import { formatRelative } from "@/lib/dateFormat";
+import { formatDateTimeWithRelative } from "@/lib/dateFormat";
 import { Users } from "lucide-react";
 
 const FILTERS = [
@@ -129,7 +129,7 @@ export default function Contacts() {
     {
       key: "lastActivity",
       label: "Last Activity",
-      render: (r) => <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelative(r.conversation.lastActivityAt)}</span>,
+      render: (r) => <span className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTimeWithRelative(r.conversation.lastActivityAt)}</span>,
     },
     {
       key: "journey",

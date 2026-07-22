@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { isToday } from "date-fns";
 import PageHeader from "@/components/PageHeader";
 import StatCard from "@/components/StatCard";
 import ChartCard from "@/components/ChartCard";
@@ -11,7 +10,7 @@ import { communicationEventService } from "@/services/communicationEvents";
 import { runningInstanceService } from "@/services/runningInstances";
 import { whatsappTemplateService } from "@/services/whatsappTemplates";
 import { useConversations, previewFor, ChannelBadge } from "@/modules/inbox";
-import { formatRelative } from "@/lib/dateFormat";
+import { formatDateTimeWithRelative, formatRelative, getISTDateKey, resolveEventTimestamp } from "@/lib/dateFormat";
 import {
   Activity,
   AlertTriangle,
@@ -64,9 +63,16 @@ export default function Dashboard() {
   useEffect(() => { load(); }, [load]);
 
   const metrics = useMemo(() => {
+    // "Today" is the IST calendar day, not the viewer's own browser/OS day —
+    // date-fns' isToday() (previously used here) compares against local
+    // time, so these KPIs could read a different count depending on which
+    // timezone the dashboard happened to be opened in.
+    const todayKey = getISTDateKey(new Date());
+    const isEventToday = (e) => getISTDateKey(resolveEventTimestamp(e)) === todayKey;
+
     const sentEvents = events.filter((e) => e.event_type === "whatsapp_sent" || e.event_type === "email_sent");
-    const todaysSent = sentEvents.filter((e) => e.occurred_at && isToday(new Date(e.occurred_at)));
-    const todaysReplied = events.filter((e) => e.event_type === "replied" && e.occurred_at && isToday(new Date(e.occurred_at)));
+    const todaysSent = sentEvents.filter(isEventToday);
+    const todaysReplied = events.filter((e) => e.event_type === "replied" && isEventToday(e));
     const whatsappSentToday = todaysSent.filter((e) => e.channel === "whatsapp").length;
     const emailsSentToday = todaysSent.filter((e) => e.channel === "email").length;
     const todaysMessages = todaysSent.length + todaysReplied.length;
@@ -75,7 +81,7 @@ export default function Dashboard() {
     const readCount = events.filter((e) => e.event_type === "read").length;
     const repliedCount = events.filter((e) => e.event_type === "replied").length;
     const failedEvents = events.filter((e) => e.event_type === "failed");
-    const failedToday = failedEvents.filter((e) => e.occurred_at && isToday(new Date(e.occurred_at))).length;
+    const failedToday = failedEvents.filter(isEventToday).length;
     const sentCount = sentEvents.length;
 
     const runningJourneys = instances.filter((i) => i.status === "running").length;
@@ -101,14 +107,19 @@ export default function Dashboard() {
       readRate: deliveredCount > 0 ? Math.round((readCount / deliveredCount) * 100) : null,
       replyRate: sentCount > 0 ? Math.round((repliedCount / sentCount) * 100) : null,
       failedToday,
-      failedEvents: [...failedEvents].sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at)).slice(0, 5),
+      failedEvents: [...failedEvents]
+        .sort((a, b) => (resolveEventTimestamp(b)?.getTime() ?? 0) - (resolveEventTimestamp(a)?.getTime() ?? 0))
+        .slice(0, 5),
       sentCount,
       templatesPendingApproval: pendingTemplates.length,
     };
   }, [events, instances, conversations, pendingTemplates]);
 
   const recentActivity = useMemo(
-    () => [...events].sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at)).slice(0, 8),
+    () =>
+      [...events]
+        .sort((a, b) => (resolveEventTimestamp(b)?.getTime() ?? 0) - (resolveEventTimestamp(a)?.getTime() ?? 0))
+        .slice(0, 8),
     [events]
   );
 
@@ -225,7 +236,7 @@ export default function Dashboard() {
                     <div className="truncate text-sm font-medium">Lead #{f.lead_id} · {f.channel}</div>
                     <div className="truncate text-[11px] text-muted-foreground">{f.payload?.error || "Send failed"}</div>
                   </div>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">{formatRelative(f.occurred_at)}</span>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{formatDateTimeWithRelative(resolveEventTimestamp(f))}</span>
                 </li>
               ))}
             </ul>
@@ -253,7 +264,7 @@ export default function Dashboard() {
                         </p>
                         <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
                           {e.channel && e.channel !== "system" && <ChannelBadge channel={e.channel} />}
-                          <span>{formatRelative(e.occurred_at)}</span>
+                          <span>{formatDateTimeWithRelative(resolveEventTimestamp(e))}</span>
                         </div>
                       </div>
                     </div>
@@ -283,7 +294,7 @@ export default function Dashboard() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate text-sm font-semibold">Lead #{c.leadId}</span>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">{formatRelative(c.lastActivityAt)}</span>
+                        <span className="shrink-0 text-[11px] text-muted-foreground">{formatDateTimeWithRelative(c.lastActivityAt)}</span>
                       </div>
                       <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{previewFor(c.latestEvent)}</p>
                     </div>

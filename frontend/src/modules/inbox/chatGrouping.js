@@ -1,6 +1,17 @@
+import { resolveEventTimestamp } from "@/lib/dateFormat";
+
 /**
  * Groups a flat communication_events list into WhatsApp-style chat items —
  * display-layer only, no new data, no change to how events are stored.
+ *
+ * Every bubble's `anchorTime` (and `readAt`/`deliveredAt`) comes from
+ * resolveEventTimestamp() rather than the row's raw `occurred_at` — for a
+ * WhatsApp inbound reply or a delivered/read status row, that prefers
+ * Meta's own webhook timestamp (already stored in the row's payload, see
+ * meta_webhook_routes.py) over this server's insert time, so the bubble
+ * timestamp, the conversation's "Last seen" (useConversations.js, same
+ * resolver), and the Communication/Journey Timeline all show the identical
+ * time for the identical event.
  *
  * - whatsapp_sent/email_sent -> starts an outbound bubble, keyed by
  *   provider_message_id (falls back to event.id when none exists yet).
@@ -50,8 +61,12 @@ function outboundText(eventType, payload) {
   return { subject, text };
 }
 
+function eventTimeMs(e) {
+  return resolveEventTimestamp(e)?.getTime() ?? 0;
+}
+
 export function groupIntoChatItems(events = []) {
-  const sorted = [...events].sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
+  const sorted = [...events].sort((a, b) => eventTimeMs(a) - eventTimeMs(b));
   const bubblesByKey = new Map();
   const items = [];
 
@@ -65,7 +80,7 @@ export function groupIntoChatItems(events = []) {
         type: "bubble",
         direction: "out",
         key,
-        anchorTime: e.occurred_at,
+        anchorTime: resolveEventTimestamp(e),
         subject,
         text,
         channel: e.channel,
@@ -87,7 +102,7 @@ export function groupIntoChatItems(events = []) {
         type: "bubble",
         direction: "in",
         key: e.id,
-        anchorTime: e.occurred_at,
+        anchorTime: resolveEventTimestamp(e),
         subject: null,
         text: payload.body || "(no message text)",
         channel: e.channel,
@@ -108,8 +123,8 @@ export function groupIntoChatItems(events = []) {
           bubble.errorReason = payload.error || null;
         } else if ((STATUS_RANK[e.event_type] ?? 0) >= (STATUS_RANK[bubble.status] ?? 0)) {
           bubble.status = e.event_type;
-          if (e.event_type === "read") bubble.readAt = e.occurred_at;
-          if (e.event_type === "delivered") bubble.deliveredAt = e.occurred_at;
+          if (e.event_type === "read") bubble.readAt = resolveEventTimestamp(e);
+          if (e.event_type === "delivered") bubble.deliveredAt = resolveEventTimestamp(e);
         }
         bubble.raw.push(e);
         continue;
@@ -120,7 +135,7 @@ export function groupIntoChatItems(events = []) {
         type: "bubble",
         direction: "out",
         key: e.id,
-        anchorTime: e.occurred_at,
+        anchorTime: resolveEventTimestamp(e),
         subject: payload.subject || null,
         text: payload.body || "(message unavailable)",
         channel: e.channel,
@@ -138,7 +153,7 @@ export function groupIntoChatItems(events = []) {
     items.push({
       type: "system",
       key: e.id,
-      anchorTime: e.occurred_at,
+      anchorTime: resolveEventTimestamp(e),
       eventType: e.event_type,
       label: SYSTEM_EVENT_LABELS[e.event_type] || e.event_type.replace(/_/g, " "),
       detail: payload.resolved_note || payload.note || payload.title || null,
@@ -146,6 +161,6 @@ export function groupIntoChatItems(events = []) {
     });
   }
 
-  items.sort((a, b) => new Date(a.anchorTime) - new Date(b.anchorTime));
+  items.sort((a, b) => (a.anchorTime?.getTime() ?? 0) - (b.anchorTime?.getTime() ?? 0));
   return items;
 }

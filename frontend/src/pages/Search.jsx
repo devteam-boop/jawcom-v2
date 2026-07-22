@@ -11,7 +11,7 @@ import { useConversations, useLeadSummaries, previewFor } from "@/modules/inbox"
 import { journeyService } from "@/services/journeys";
 import { templateService } from "@/services/templates";
 import { whatsappTemplateService } from "@/services/whatsappTemplates";
-import { formatRelative } from "@/lib/dateFormat";
+import { formatDateTimeWithRelative, resolveEventTimestamp } from "@/lib/dateFormat";
 import { Search, MessageSquare, Users, Workflow, FileText, Megaphone } from "lucide-react";
 
 const PAGE_SIZE = 8;
@@ -194,7 +194,7 @@ function ConvRow({ c, summary }) {
         <div className="truncate text-sm font-semibold">{summary?.name || `Lead #${c.leadId}`}</div>
         <div className="truncate text-xs text-muted-foreground">{previewFor(c.latestEvent)}</div>
       </div>
-      <span className="shrink-0 text-[11px] text-muted-foreground">{formatRelative(c.lastActivityAt)}</span>
+      <span className="shrink-0 text-[11px] text-muted-foreground">{formatDateTimeWithRelative(c.lastActivityAt)}</span>
     </Link>
   );
 }
@@ -207,7 +207,7 @@ function MessageRow({ e }) {
         <div className="truncate text-sm font-semibold">Lead #{e.leadId} · {e.event_type.replace(/_/g, " ")}</div>
         <div className="truncate text-xs text-muted-foreground">{e.payload?.body || e.payload?.subject || "—"}</div>
       </div>
-      <span className="shrink-0 text-[11px] text-muted-foreground">{formatRelative(e.occurred_at)}</span>
+      <span className="shrink-0 text-[11px] text-muted-foreground">{formatDateTimeWithRelative(resolveEventTimestamp(e))}</span>
     </Link>
   );
 }

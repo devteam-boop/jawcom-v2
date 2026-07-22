@@ -455,6 +455,13 @@ class WhatsAppSendRequest(BaseModel):
     # Takes precedence over template_key when both are given.
     template_name: Optional[str] = None
     language: str = "en_US"
+    # Freeform (non-template) send — WhatsApp 24h Session Window feature.
+    # Exactly one of template_name/template_key OR body must be supplied.
+    # Only Meta-acceptable while this lead's 24h customer-service window is
+    # open (see is_whatsapp_session_window_active() below); the Inbox
+    # composer only offers this path once it has computed the same window
+    # as active client-side, but this is still re-checked server-side.
+    body: Optional[str] = None
     # Required — see EmailSendRequest.stage above; same rule.
     stage: str
     variables: Dict[str, Any] = Field(default_factory=dict)
@@ -474,7 +481,7 @@ async def _send_whatsapp_and_record(
     request: "WhatsAppSendRequest",
     recipient_phone: str,
     recipient_name: Optional[str],
-    resolved_template_name: str,
+    resolved_template_name: Optional[str],
     language: str,
     rendered_body: str,
 ) -> None:
@@ -488,6 +495,12 @@ async def _send_whatsapp_and_record(
     Template Management Phase 1, Feature 5) — always stored verbatim in the
     resulting communication_event's payload (Feature 7: "Store
     template_name in communication_events. Do not infer later.").
+
+    ``resolved_template_name is None`` means a freeform (24h session
+    window) send instead — MetaWhatsAppIntegration.execute() branches on
+    the presence of "text" vs "template_name" in the payload below and
+    calls MetaProvider.send_message() (plain-text Graph API) rather than
+    send_template_message().
     """
     async with async_session_maker() as db:
         event_service = CommunicationEventService(db)
@@ -507,6 +520,7 @@ async def _send_whatsapp_and_record(
                 "template_name": resolved_template_name,
                 "language": language,
                 "variables": request.variables,
+                "text": rendered_body if resolved_template_name is None else None,
             })
         except NativeProviderError as exc:
             logger.warning(
@@ -594,10 +608,16 @@ async def send_whatsapp(
 ):
     # ── 1. Validate request. Exactly one of template_name (new — Meta-synced
     #        whatsapp_templates, Phase 1 Feature 5) / template_key (legacy —
-    #        generic templates table) must be supplied; template_name wins
-    #        if both are. ──────────────────────────────────────────────────
-    if not request.template_name and not request.template_key:
-        raise HTTPException(status_code=400, detail="One of template_name or template_key is required")
+    #        generic templates table) — an approved-template send — OR body
+    #        — a freeform reply, WhatsApp 24h Session Window feature, only
+    #        Meta-acceptable inside the lead's 24h customer-service window —
+    #        must be supplied. template_name wins if both template fields
+    #        are given. ─────────────────────────────────────────────────────
+    has_template = bool(request.template_name or request.template_key)
+    if has_template and request.body:
+        raise HTTPException(status_code=400, detail="Provide either a template (template_name/template_key) or body, not both")
+    if not has_template and not request.body:
+        raise HTTPException(status_code=400, detail="One of template_name, template_key, or body is required")
 
     template_uuid: Optional[UUID] = None
     if not request.template_name and request.template_key:
@@ -621,9 +641,27 @@ async def send_whatsapp(
     if not recipient_phone:
         raise HTTPException(status_code=400, detail=f"Lead {request.lead_id} has no phone number on file")
 
-    # ── 4/5. Resolve the template. Stays synchronous — local DB lookup/
-    #        render, not the external Meta round-trip being deferred below.
-    if request.template_name:
+    # ── 4/5. Resolve the template — OR, for a freeform reply, re-verify the
+    #        24h session window server-side (belt-and-suspenders: the Inbox
+    #        composer already only offers this path once its own client-side
+    #        computation over the same communication_events says the window
+    #        is open; Meta's Graph API would also reject an out-of-window
+    #        freeform send, but checking here gives a clear 400 instead of
+    #        surfacing Meta's error text). Stays synchronous — local DB
+    #        lookup, not the external Meta round-trip being deferred below.
+    if request.body:
+        event_service_check = CommunicationEventService(db)
+        if not await event_service_check.is_whatsapp_session_window_active(request.lead_id):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The WhatsApp customer service session has expired. "
+                    "Send an approved template to reopen the conversation."
+                ),
+            )
+        resolved_template_name = None
+        rendered_body = request.body
+    elif request.template_name:
         # New path: Meta-synced whatsapp_templates (WhatsApp Template
         # Management Phase 5). Resolves to the LATEST version of this
         # (name, language) whose status is APPROVED — never a Pending/

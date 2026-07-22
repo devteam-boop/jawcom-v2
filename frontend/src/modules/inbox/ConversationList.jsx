@@ -3,7 +3,7 @@ import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
-import { formatRelative } from "@/lib/dateFormat";
+import { formatDateTimeWithRelative, formatTooltip } from "@/lib/dateFormat";
 import ChannelBadge from "./ChannelBadge";
 import { previewFor } from "./conversationPreview";
 import { isConversationUnread } from "./unreadTracker";
@@ -93,8 +93,8 @@ export default function ConversationList({ conversations, selectedLeadId, onSele
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-semibold">{name}</span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground" title={c.lastActivityAt || undefined}>
-                      {formatRelative(c.lastActivityAt)}
+                    <span className="shrink-0 text-[11px] text-muted-foreground" title={formatTooltip(c.lastActivityAt)}>
+                      {formatDateTimeWithRelative(c.lastActivityAt)}
                     </span>
                   </div>
                   <p className={cn("mt-1 line-clamp-1 text-xs", unread ? "font-medium text-foreground" : "text-muted-foreground")}>

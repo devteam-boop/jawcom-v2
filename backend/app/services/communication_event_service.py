@@ -52,6 +52,14 @@ _JAWIS_WEBHOOK_RETRY_DELAYS = [1, 5, 15]  # seconds; 1 initial attempt + 3 retri
 # matchable reply, not a random inbound.
 _REPLY_PHONE_MATCH_WINDOW_HOURS = 72
 
+# WhatsApp's own 24h customer-service session window (Meta policy, not a
+# JawCom setting) — freeform (non-template) sends are only Meta-acceptable
+# within 24h of the customer's last inbound message. Mirrors the same
+# window the Inbox computes client-side from the same 'replied' events
+# (frontend/src/modules/inbox/whatsappWindow.js) — kept in sync manually
+# since both derive from the same rule, not from a shared constant module.
+WHATSAPP_SESSION_WINDOW_HOURS = 24
+
 
 async def _publish_to_jawis(schema: CommunicationEventSchema) -> bool:
     """Fire-and-forget POST of one communication_events row to JAWIS_WEBHOOK_URL.
@@ -291,6 +299,19 @@ class CommunicationEventService:
             return anchor.provider_message_id, "phone_any"
 
         return None, "unmatched"
+
+    async def is_whatsapp_session_window_active(self, lead_id: int) -> bool:
+        """Server-side guard for freeform (non-template) WhatsApp sends —
+        True only if this lead has an inbound 'replied' WhatsApp event within
+        the last WHATSAPP_SESSION_WINDOW_HOURS. Belt-and-suspenders: Meta's
+        own Graph API also rejects an out-of-window freeform send, but
+        checking here avoids the round-trip and gives a clear 400 instead of
+        surfacing Meta's error text. Reads the same communication_events
+        rows the Inbox already polls — no new table."""
+        last_reply = await self.repo.get_latest_by_lead_and_event_type(lead_id, "replied", channel="whatsapp")
+        if last_reply is None:
+            return False
+        return (datetime.utcnow() - last_reply.occurred_at) <= timedelta(hours=WHATSAPP_SESSION_WINDOW_HOURS)
 
     async def record_inbound_status(
         self,

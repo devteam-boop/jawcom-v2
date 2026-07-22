@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { communicationEventService } from "@/services/communicationEvents";
+import { resolveEventTimestamp } from "@/lib/dateFormat";
 
 /**
  * One conversation per lead, derived entirely from the existing
@@ -30,8 +31,15 @@ export function useConversations() {
       });
 
       const grouped = Array.from(byLead.entries()).map(([leadId, leadEvents]) => {
+        // Sorted (and lastActivityAt below) by resolveEventTimestamp, not
+        // raw occurred_at, so ordering and the displayed "Last seen" match
+        // exactly what ChatThread's bubbles show for the same events (see
+        // chatGrouping.js, which resolves the identical way) — this is the
+        // single computation every consumer of `conversation.lastActivityAt`
+        // (Dashboard, Contacts, Search, Inbox list, conversation header)
+        // reads, so fixing it here keeps all of them in sync.
         const sorted = [...leadEvents].sort(
-          (a, b) => new Date(a.occurred_at) - new Date(b.occurred_at)
+          (a, b) => (resolveEventTimestamp(a)?.getTime() ?? 0) - (resolveEventTimestamp(b)?.getTime() ?? 0)
         );
         const latestEvent = sorted[sorted.length - 1];
         const channels = Array.from(
@@ -41,12 +49,12 @@ export function useConversations() {
           leadId,
           events: sorted,
           latestEvent,
-          lastActivityAt: latestEvent?.occurred_at || null,
+          lastActivityAt: latestEvent ? resolveEventTimestamp(latestEvent) : null,
           channels,
         };
       });
 
-      grouped.sort((a, b) => new Date(b.lastActivityAt) - new Date(a.lastActivityAt));
+      grouped.sort((a, b) => (b.lastActivityAt?.getTime() ?? 0) - (a.lastActivityAt?.getTime() ?? 0));
 
       setConversations(grouped);
       setError(null);

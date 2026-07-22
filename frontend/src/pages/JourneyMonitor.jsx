@@ -28,7 +28,7 @@ import { JourneyList, useJourneys, ExecutionDrawer, INSTANCE_STATUS_TONE } from 
 import { runningInstanceService } from "@/services/runningInstances";
 import { journeyService } from "@/services/journeys";
 import { stageMappingService } from "@/services/stageMappings";
-import { formatRelative } from "@/lib/dateFormat";
+import { formatDateTime, formatTooltip } from "@/lib/dateFormat";
 import { toast } from "sonner";
 import {
   Workflow,
@@ -251,7 +251,15 @@ export default function JourneyMonitor() {
         </span>
       ),
     },
-    { key: "lastActivity", label: "Last Activity", render: (r) => <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelative(r.lastActivity)}</span> },
+    {
+      key: "lastActivity",
+      label: "Last Activity",
+      render: (r) => (
+        <span className="whitespace-nowrap text-xs text-muted-foreground" title={formatTooltip(r.lastActivity)}>
+          {formatDateTime(r.lastActivity)}
+        </span>
+      ),
+    },
   ];
 
   if (loading) {

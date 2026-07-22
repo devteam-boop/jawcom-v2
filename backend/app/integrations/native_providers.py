@@ -74,6 +74,22 @@ class MetaWhatsAppIntegration(BaseIntegration):
         if not phone:
             raise NativeProviderError("No phone number available for recipient")
 
+        # Freeform (non-template) send — the 24h customer-service session
+        # window path (WhatsApp 24h Session feature). Meta's send_message()
+        # already existed on MetaProvider but nothing called it before this;
+        # send_whatsapp_executor.py (Journey Engine) never sets "text", so
+        # that path is completely unaffected and always takes the template
+        # branch below.
+        if payload.get("text") and not payload.get("template_name"):
+            result = await provider.send_message(
+                recipient=phone.lstrip("+"),
+                message=payload["text"],
+            )
+            if result.get("status") == "failed":
+                raise NativeProviderError(result.get("error") or "Meta WhatsApp send failed")
+            result["message_id"] = result.get("provider_message_id")
+            return result
+
         variables = payload.get("variables") or {}
         # Meta's approved-template send takes POSITIONAL parameters
         # ({{1}}, {{2}}, ... substituted by Meta itself server-side, not

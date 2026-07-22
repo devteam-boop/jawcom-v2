@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import EmptyState from "@/components/EmptyState";
-import { formatDateTimeWithRelative } from "@/lib/dateFormat";
+import { formatDateTimeWithRelative, resolveEventTimestamp } from "@/lib/dateFormat";
 import { jawisService } from "@/services/jawis";
 import { runningInstanceService } from "@/services/runningInstances";
 import { journeyService } from "@/services/journeys";
@@ -11,6 +11,7 @@ import ChannelBadge from "./ChannelBadge";
 import ChatThread from "./ChatThread";
 import MessageComposer from "./MessageComposer";
 import { markConversationSeen } from "./unreadTracker";
+import { getWhatsappSessionWindow } from "./whatsappWindow";
 import { MessagesSquare, ExternalLink, Phone, Mail } from "lucide-react";
 
 /**
@@ -71,13 +72,20 @@ export default function ConversationThread({ conversation }) {
 
   const events = useMemo(() => {
     if (!conversation) return [];
-    return [...conversation.events, ...pending].sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
+    return [...conversation.events, ...pending].sort(
+      (a, b) => (resolveEventTimestamp(a)?.getTime() ?? 0) - (resolveEventTimestamp(b)?.getTime() ?? 0)
+    );
   }, [conversation, pending]);
 
   const handleSent = (optimisticEvent) => {
     setPending((prev) => [...prev, optimisticEvent]);
     if (leadId != null) markConversationSeen(leadId);
   };
+
+  // Recomputed on every render — which happens on every 10s poll tick even
+  // with no new events — so a window that expires purely from time passing
+  // (no new message) is still picked up without a dedicated timer.
+  const waWindow = useMemo(() => getWhatsappSessionWindow(events), [events]);
 
   if (!conversation) {
     return (
@@ -133,7 +141,7 @@ export default function ConversationThread({ conversation }) {
         <ChatThread events={events} />
       </div>
 
-      <MessageComposer leadId={leadId} leadStage={leadSummary?.stage} onSent={handleSent} />
+      <MessageComposer leadId={leadId} leadStage={leadSummary?.stage} onSent={handleSent} waWindow={waWindow} />
     </section>
   );
 }

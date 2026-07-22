@@ -105,6 +105,26 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_latest_by_lead_and_event_type(
+        self, lead_id: int, event_type: str, channel: Optional[str] = None,
+    ) -> Optional[CommunicationEvent]:
+        """Most recent event of a given type for a lead — used to derive the
+        WhatsApp 24h customer-service session window (anchor = latest
+        'replied' event) without a new table or aggregate endpoint."""
+        query = (
+            select(CommunicationEvent)
+            .where(
+                CommunicationEvent.lead_id == lead_id,
+                CommunicationEvent.event_type == event_type,
+            )
+            .order_by(CommunicationEvent.occurred_at.desc())
+            .limit(1)
+        )
+        if channel:
+            query = query.where(CommunicationEvent.channel == channel)
+        result = await self.session.execute(query)
+        return result.scalar_one_or_none()
+
     async def exists_by_provider_message_id_and_type(self, provider_message_id: str, event_type: str) -> bool:
         """Idempotency check — prevents duplicate rows when a provider
         retries the same webhook delivery."""

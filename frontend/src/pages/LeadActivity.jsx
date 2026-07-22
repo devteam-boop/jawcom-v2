@@ -18,6 +18,7 @@ import {
   useLeadActivity,
 } from "@/modules/leads";
 import { journeyService } from "@/services/journeys";
+import { resolveEventTimestamp } from "@/lib/dateFormat";
 
 /**
  * Lead Activity page — a single view combining Lead Details, Journey
@@ -45,9 +46,15 @@ export default function LeadActivity() {
       .catch(() => setJourneyMap({}));
   }, []);
 
+  // Same resolveEventTimestamp() the embedded CommunicationTimeline below
+  // uses per-row, so this card's "Last Activity" always matches the actual
+  // latest row shown in the Activity Timeline section for the same lead.
   const lastActivityAt = useMemo(() => {
     if (events.length === 0) return null;
-    return events.reduce((latest, e) => (!latest || e.occurred_at > latest ? e.occurred_at : latest), null);
+    return events.reduce((latest, e) => {
+      const ts = resolveEventTimestamp(e);
+      return ts && (!latest || ts > latest) ? ts : latest;
+    }, null);
   }, [events]);
 
   const openInstance = useCallback((id) => setSelectedInstanceId(id), []);

@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { formatDateTimeWithRelative, formatTime } from "@/lib/dateFormat";
+import { formatDateTimeWithRelative, formatTime, getISTDateKey } from "@/lib/dateFormat";
 import { groupIntoChatItems } from "./chatGrouping";
-import { Check, CheckCheck, AlertTriangle, Zap, MessageCircle, Mail, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, CheckCheck, AlertTriangle, Zap, MessageCircle, Mail, ChevronDown, ChevronRight, User, UserCog } from "lucide-react";
 
 const CHANNEL_ICON = { whatsapp: MessageCircle, email: Mail };
 
@@ -59,6 +59,12 @@ function Bubble({ item }) {
           <span className="inline-flex items-center gap-1"><Icon className="h-3 w-3" /> {item.channel || "—"}</span>
           {item.source === "automation" && (
             <span className="inline-flex items-center gap-0.5 rounded bg-secondary px-1 py-0.5"><Zap className="h-2.5 w-2.5" /> Automated</span>
+          )}
+          {item.direction === "out" && item.source === "manual" && (
+            <span className="inline-flex items-center gap-0.5 rounded bg-secondary px-1 py-0.5"><UserCog className="h-2.5 w-2.5" /> Manual</span>
+          )}
+          {item.direction === "in" && (
+            <span className="inline-flex items-center gap-0.5 rounded bg-secondary px-1 py-0.5"><User className="h-2.5 w-2.5" /> Customer</span>
           )}
           <span>{formatTime(item.anchorTime)}</span>
           <StatusIndicator item={item} />
@@ -121,7 +127,10 @@ export default function ChatThread({ events = [] }) {
   return (
     <div className="space-y-3" data-testid="chat-thread">
       {items.map((item) => {
-        const day = item.anchorTime ? new Date(item.anchorTime).toDateString() : null;
+        // IST calendar day, not the browser's own local day — a divider
+        // must fall on the same boundary regardless of which timezone the
+        // viewer's machine happens to be in.
+        const day = item.anchorTime ? getISTDateKey(item.anchorTime) : null;
         const showDayMarker = day && day !== lastDay;
         lastDay = day;
         return (

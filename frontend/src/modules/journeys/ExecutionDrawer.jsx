@@ -22,7 +22,7 @@ import { flowExecutionLogService } from "@/services/flowExecutionLogs";
 import { approvalService } from "@/services/approvals";
 import { taskService } from "@/services/tasks";
 import { communicationEventService } from "@/services/communicationEvents";
-import { formatDateTimeWithRelative, formatDate } from "@/lib/dateFormat";
+import { formatDateTimeWithRelative, formatDate, formatDateTimeSeconds } from "@/lib/dateFormat";
 import CommunicationTimeline from "./CommunicationTimeline";
 import { toast } from "sonner";
 import {
@@ -476,7 +476,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                             {s.error_message && !isOpen && (
                               <p className="mt-0.5 truncate text-xs text-red-500">{s.error_message}</p>
                             )}
-                            <p className="mt-0.5 text-[11px] text-muted-foreground">{formatDateTimeWithRelative(s.executed_at)}</p>
+                            <p className="mt-0.5 text-[11px] text-muted-foreground">{formatDateTimeSeconds(s.executed_at)}</p>
                           </div>
                           {isOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                         </button>
@@ -512,7 +512,7 @@ export default function ExecutionDrawer({ instanceId, onClose, onActionComplete 
                       return (
                         <li key={log.id || i} className="relative">
                           <span className={`absolute -left-[26px] top-1 flex h-3 w-3 items-center justify-center rounded-full border-2 border-background ${dotColor}`} />
-                          <div className="text-xs text-muted-foreground">{formatDateTimeWithRelative(log.executed_at || log.created_at)}</div>
+                          <div className="text-xs text-muted-foreground">{formatDateTimeSeconds(log.executed_at || log.created_at)}</div>
                           <p className="flex items-center gap-1.5 text-sm font-medium">
                             {log.node_id}
                             {log.status && (

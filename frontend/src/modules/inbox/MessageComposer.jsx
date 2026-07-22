@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Send, Paperclip, Smile, Sparkles, Wand2, Scissors, Briefcase, Smile as SmileyIcon, Languages } from "lucide-react";
+import { Send, Paperclip, Smile, Sparkles, Wand2, Scissors, Briefcase, Smile as SmileyIcon, Languages, Lock, MessageCircle as MessageCircleIcon } from "lucide-react";
 import { templateService } from "@/services/templates";
 import { whatsappTemplateService } from "@/services/whatsappTemplates";
 import { messageService } from "@/services/messages";
@@ -49,18 +49,24 @@ const CUSTOM = "__custom__";
  * browser's session cookie (set at /login) covers every send, same as
  * every other authenticated route in the app.
  *
- * WhatsApp always requires an approved template — Meta's Cloud API only
- * accepts template-addressed sends outside an active session, and this
- * backend has no wired path for freeform WhatsApp text (MetaProvider has a
- * send_message() method for it, but no route/integration calls it — wiring
- * that up is a real new send-path, not a thin proxy, so it's stubbed here
- * rather than faked). Email supports both a template and a fully custom
- * subject/body.
+ * WhatsApp: outside the 24h customer-service session window (no inbound
+ * reply yet, or more than 24h since the last one — see waWindow, computed
+ * by ConversationThread from the same communication_events via
+ * whatsappWindow.js) only an approved template may be sent — Meta's Cloud
+ * API rejects freeform text outside an active session. Once waWindow.active
+ * is true (a real inbound "replied" event within the last 24h), the
+ * WhatsApp panel switches to Live Chat mode: template selector hidden,
+ * plain text send instead, via POST /api/messages/whatsapp/send with
+ * body set (no template_name/template_key) — backend/app/api/message_routes.py
+ * re-checks the same 24h window server-side before calling
+ * MetaProvider.send_message() (Graph API plain-text send). Email supports
+ * both a template and a fully custom subject/body, unchanged.
  *
  * Attachments/emoji/voice are stubbed (disabled, tooltip'd) — no upload/
  * media backend exists.
  */
-export default function MessageComposer({ leadId, leadStage, onSent }) {
+export default function MessageComposer({ leadId, leadStage, onSent, waWindow }) {
+  const waWindowActive = !!waWindow?.active;
   const [channel, setChannel] = useState("email");
   const [emailTemplates, setEmailTemplates] = useState([]);
   const [waTemplates, setWaTemplates] = useState([]);
@@ -69,6 +75,10 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
   const [body, setBody] = useState("");
   const [variables, setVariables] = useState({});
   const [sending, setSending] = useState(false);
+  // Live Chat mode's freeform WhatsApp draft — separate from `body` (the
+  // email custom-message field) since the two channels can hold independent
+  // in-progress drafts.
+  const [waFreeText, setWaFreeText] = useState("");
 
   const [aiBusy, setAiBusy] = useState(null); // which action is in flight, or null
   const [aiResult, setAiResult] = useState(null); // { title, text } shown in a dialog
@@ -84,6 +94,7 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
     setSubject("");
     setBody("");
     setVariables({});
+    setWaFreeText("");
   }, [channel, leadId]);
 
   const selectedEmailTemplate = useMemo(
@@ -159,13 +170,35 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
       setBody(result.text);
     });
 
+  // Live Chat mode only (channel === "whatsapp" && waWindowActive) — offered
+  // once the customer has actually replied, per spec. Every one of these
+  // only inserts into the WhatsApp draft textbox; none of them sends.
+  const handleWaSuggested = () =>
+    runAi("wa-suggested", async () => {
+      const result = await aiAssistantService.get(leadId);
+      if (!result.reply_suggestion) {
+        toast.info("No reply suggestion available for this conversation right now.");
+        return;
+      }
+      setWaFreeText(result.reply_suggestion);
+    });
+
+  const handleWaTransform = (action, lang) =>
+    runAi(action, async () => {
+      if (!waFreeText.trim()) return;
+      const result = await aiTextService.transform(waFreeText, action, lang);
+      setWaFreeText(result.text);
+    });
+
   const contentReady =
     !!leadStage &&
     (channel === "email"
       ? templateId === CUSTOM
         ? subject.trim() && body.trim()
         : true
-      : !!selectedWaTemplate && waVars.every((v) => (variables[v] || "").trim()));
+      : waWindowActive
+        ? waFreeText.trim().length > 0
+        : !!selectedWaTemplate && waVars.every((v) => (variables[v] || "").trim()));
 
   const doSend = async () => {
     setSending(true);
@@ -188,6 +221,24 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
             subject: templateId === CUSTOM ? subject : selectedEmailTemplate?.subject,
             body: templateId === CUSTOM ? body : selectedEmailTemplate?.content,
           },
+        });
+      } else if (waWindowActive) {
+        // Live Chat mode — freeform reply, only Meta-acceptable (and only
+        // offered here) within the 24h customer-service session window.
+        const payload = {
+          lead_id: leadId,
+          body: waFreeText,
+          stage: leadStage,
+          module: "general",
+        };
+        const result = await messageService.sendWhatsapp(payload);
+        onSent?.({
+          id: result.communication_event_id,
+          event_type: "whatsapp_sent",
+          channel: "whatsapp",
+          lead_id: leadId,
+          occurred_at: new Date().toISOString(),
+          payload: { source: "manual", status: result.status, body: waFreeText },
         });
       } else {
         const payload = {
@@ -213,6 +264,7 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
       setSubject("");
       setBody("");
       setVariables({});
+      setWaFreeText("");
     } catch (err) {
       toast.error(err?.body?.detail || err.message || "Send failed");
     } finally {
@@ -244,8 +296,8 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
           variant={channel === "whatsapp" ? "default" : "outline"}
           className="h-7 text-xs"
           onClick={() => setChannel("whatsapp")}
-          disabled={waTemplates.length === 0}
-          title={waTemplates.length === 0 ? "No approved WhatsApp templates yet" : undefined}
+          disabled={waTemplates.length === 0 && !waWindowActive}
+          title={waTemplates.length === 0 && !waWindowActive ? "No approved WhatsApp templates yet" : undefined}
           data-testid="composer-channel-whatsapp"
         >
           WhatsApp
@@ -345,8 +397,59 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
               </div>
             )}
           </div>
-        ) : (
+        ) : waWindowActive ? (
+          // Live Chat mode — the 24h customer-service session window is
+          // open (a real inbound reply within the last 24h). Template
+          // selector hidden; plain freeform text instead, WhatsApp-Web
+          // style Enter-to-send.
           <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+              <MessageCircleIcon className="h-3 w-3 text-emerald-500" />
+              <span>Live chat — customer replied within the last 24 hours.</span>
+            </div>
+            <div className="mb-1 flex flex-wrap items-center gap-1">
+              <Sparkles className="h-3 w-3 text-primary" />
+              <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={handleWaSuggested} disabled={aiBusy !== null} data-testid="ai-wa-suggested">
+                {aiBusy === "wa-suggested" ? "…" : "Suggested"}
+              </Button>
+              <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => handleWaTransform("professional")} disabled={aiBusy !== null} data-testid="ai-wa-professional">
+                {aiBusy === "professional" ? "…" : "Professional"}
+              </Button>
+              <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => handleWaTransform("translate", "Hindi")} disabled={aiBusy !== null} data-testid="ai-wa-hindi">
+                {aiBusy === "translate" ? "…" : "Hindi"}
+              </Button>
+              <Button variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]" onClick={() => handleWaTransform("translate", "English")} disabled={aiBusy !== null} data-testid="ai-wa-english">
+                {aiBusy === "translate" ? "…" : "English"}
+              </Button>
+            </div>
+            <Textarea
+              placeholder="Type a WhatsApp message… (Enter to send, Shift+Enter for a new line)"
+              rows={2}
+              value={waFreeText}
+              onChange={(e) => setWaFreeText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              className="resize-none border-0 bg-transparent p-0 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+              data-testid="composer-whatsapp-freetext"
+            />
+          </div>
+        ) : (
+          // Locked mode — no reply yet, or the 24h window has expired.
+          // Template sending stays enabled; automation is untouched
+          // (Journey/Automation Engine sends independently of this UI).
+          <div className="space-y-2">
+            <div className="flex items-start gap-1.5 rounded-md bg-secondary/50 p-2 text-[11px] text-muted-foreground">
+              <Lock className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                {waWindow?.everReplied
+                  ? "The WhatsApp customer service session has expired. Send an approved template to reopen the conversation."
+                  : "Waiting for customer reply. Manual WhatsApp messages become available after the customer replies within the 24-hour service window."}
+              </span>
+            </div>
             <Select value={templateId === CUSTOM ? "" : templateId} onValueChange={setTemplateId}>
               <SelectTrigger className="h-8 text-xs" data-testid="composer-whatsapp-template">
                 <SelectValue placeholder="Select an approved template…" />
