@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { authService } from "@/services/auth";
+import { setCsrfToken } from "@/services/apiClient";
 
 /**
  * Real admin auth state for the whole app. Replaces the old per-composer
@@ -17,10 +18,12 @@ export function AuthProvider({ children }) {
   const refresh = useCallback(async () => {
     try {
       const me = await authService.me();
+      setCsrfToken(me.csrf_token);
       setUser(me);
       setStatus("authenticated");
       return me;
     } catch {
+      setCsrfToken(null);
       setUser(null);
       setStatus("anonymous");
       return null;
@@ -33,6 +36,7 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const onUnauthorized = () => {
+      setCsrfToken(null);
       setUser(null);
       setStatus("anonymous");
     };
@@ -42,6 +46,7 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async ({ email, password, rememberMe }) => {
     const result = await authService.login({ email, password, rememberMe });
+    setCsrfToken(result.csrf_token);
     setUser(result.user);
     setStatus("authenticated");
     return result.user;
@@ -51,6 +56,7 @@ export function AuthProvider({ children }) {
     try {
       await authService.logout();
     } finally {
+      setCsrfToken(null);
       setUser(null);
       setStatus("anonymous");
     }

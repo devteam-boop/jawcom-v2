@@ -3,6 +3,20 @@ const BASE_URL = process.env.REACT_APP_BACKEND_URL || "http://127.0.0.1:8000";
 const CSRF_COOKIE_NAME = "jawcom_csrf";
 const CSRF_HEADER_NAME = "X-CSRF-Token";
 
+// Frontend (Vercel) and backend (Render) are different origins — the
+// browser sends the jawcom_csrf cookie back to the backend fine, but
+// document.cookie can never expose a cookie set by a different origin
+// than the page reading it, no SameSite/Secure/Domain setting changes
+// that. So the source of truth is this in-memory value, populated from
+// the login/me response bodies (see AuthContext.jsx) — the cookie read
+// below is kept only as a fallback for same-origin dev/deploy setups
+// where it happens to work.
+let inMemoryCsrfToken = null;
+
+export function setCsrfToken(token) {
+  inMemoryCsrfToken = token || null;
+}
+
 class ApiError extends Error {
   constructor(status, body) {
     const detail =
@@ -61,7 +75,7 @@ function buildUrl(path, params) {
 
 function mutationHeaders(extra) {
   const headers = { "Content-Type": "application/json", ...extra };
-  const csrf = readCsrfCookie();
+  const csrf = inMemoryCsrfToken || readCsrfCookie();
   if (csrf) headers[CSRF_HEADER_NAME] = csrf;
   return headers;
 }

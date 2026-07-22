@@ -55,7 +55,7 @@ def _validate_email(value: str) -> str:
     return value
 
 
-def _set_session_cookies(response: Response, *, raw_token: str, remember_me: bool) -> None:
+def _set_session_cookies(response: Response, *, raw_token: str, remember_me: bool) -> str:
     settings = get_settings()
     max_age = (
         settings.ADMIN_SESSION_REMEMBER_TTL_DAYS * 86400
@@ -70,9 +70,20 @@ def _set_session_cookies(response: Response, *, raw_token: str, remember_me: boo
         max_age=max_age,
     )
     response.set_cookie(settings.ADMIN_SESSION_COOKIE_NAME, raw_token, httponly=True, **cookie_kwargs)
-    # Not HttpOnly — the frontend JS must be able to read this one to echo
-    # it back as X-CSRF-Token (double-submit pattern, see app/core/csrf.py).
-    response.set_cookie(CSRF_COOKIE_NAME, generate_csrf_token(), httponly=False, **cookie_kwargs)
+    # Not HttpOnly so same-origin deployments can read it via document.cookie
+    # — but frontend and backend here live on two unrelated registrable
+    # domains (Vercel + Render), and document.cookie can never expose a
+    # cookie belonging to a different origin than the page reading it, no
+    # matter the SameSite/Secure/Domain flags. So this cookie alone is not
+    # sufficient to get the token into the frontend's hands; the same value
+    # is also returned in the login/me JSON response bodies below, which
+    # the frontend actually reads it from (see apiClient.js's in-memory
+    # csrfToken). Kept as a real cookie too — the double-submit compare in
+    # app/core/csrf.py still checks it against the header on every request,
+    # so this is additive, not a downgrade.
+    csrf_token = generate_csrf_token()
+    response.set_cookie(CSRF_COOKIE_NAME, csrf_token, httponly=False, **cookie_kwargs)
+    return csrf_token
 
 
 def _clear_session_cookies(response: Response) -> None:
@@ -99,6 +110,11 @@ class AdminUserOut(BaseModel):
 
 class LoginResponse(BaseModel):
     user: AdminUserOut
+    # See _set_session_cookies above: the frontend's own origin (Vercel)
+    # can't read the CSRF cookie the backend (Render) just set, so it's
+    # also handed over here, in a response body only the caller who made
+    # this exact request can read.
+    csrf_token: str
 
 
 @router.post("/login", response_model=LoginResponse, summary="Admin login")
@@ -144,11 +160,14 @@ async def login(request: LoginRequest, http_request: Request, response: Response
     raw_token, _session = await create_session(db, admin_user, remember_me=request.remember_me, ip_address=ip, user_agent=ua)
     await db.commit()
 
-    _set_session_cookies(response, raw_token=raw_token, remember_me=request.remember_me)
-    return LoginResponse(user=AdminUserOut(
-        id=str(admin_user.id), email=admin_user.email, full_name=admin_user.full_name,
-        role=admin_user.role.value, last_login_at=admin_user.last_login_at,
-    ))
+    csrf_token = _set_session_cookies(response, raw_token=raw_token, remember_me=request.remember_me)
+    return LoginResponse(
+        user=AdminUserOut(
+            id=str(admin_user.id), email=admin_user.email, full_name=admin_user.full_name,
+            role=admin_user.role.value, last_login_at=admin_user.last_login_at,
+        ),
+        csrf_token=csrf_token,
+    )
 
 
 @router.post("/logout", summary="Log out the current session")
@@ -169,11 +188,22 @@ async def logout(http_request: Request, response: Response, db: AsyncSession = D
     return {"detail": "Logged out"}
 
 
-@router.get("/me", response_model=AdminUserOut, summary="Current logged-in admin")
-async def me(admin_user: AdminUser = Depends(get_current_admin)):
-    return AdminUserOut(
+class MeResponse(AdminUserOut):
+    # Lets the frontend recover its in-memory CSRF token after a page
+    # reload (session cookie survives; any JS state does not) without a
+    # fresh login — see _set_session_cookies' docstring for why this can't
+    # just be read back off the cookie on Vercel/Render's split domains.
+    # None only if a pre-this-change session somehow has no CSRF cookie at
+    # all; a normal re-login sets one going forward.
+    csrf_token: Optional[str] = None
+
+
+@router.get("/me", response_model=MeResponse, summary="Current logged-in admin")
+async def me(http_request: Request, admin_user: AdminUser = Depends(get_current_admin)):
+    return MeResponse(
         id=str(admin_user.id), email=admin_user.email, full_name=admin_user.full_name,
         role=admin_user.role.value, last_login_at=admin_user.last_login_at,
+        csrf_token=http_request.cookies.get(CSRF_COOKIE_NAME),
     )
 
 
