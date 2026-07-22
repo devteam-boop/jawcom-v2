@@ -11,14 +11,31 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import ThemeToggle from "@/components/ThemeToggle";
-import { WORKSPACES, CURRENT_USER } from "@/dummy-data";
+import { WORKSPACES } from "@/dummy-data";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
+
+function initialsOf(name) {
+  return (name || "")
+    .split(" ")
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
 
 export default function Header({ onToggleSidebar, onOpenMobile }) {
   const [workspace, setWorkspace] = useState(WORKSPACES[0]);
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  const handleSignOut = async () => {
+    await logout();
+    navigate("/login", { replace: true });
+  };
 
   return (
     <header
@@ -137,29 +154,27 @@ export default function Header({ onToggleSidebar, onOpenMobile }) {
             >
               <Avatar className="h-7 w-7">
                 <AvatarFallback className="bg-primary text-[11px] font-semibold text-primary-foreground">
-                  {CURRENT_USER.initials}
+                  {initialsOf(user?.full_name) || "?"}
                 </AvatarFallback>
               </Avatar>
               <span className="hidden text-sm font-medium md:block">
-                {CURRENT_USER.name.split(" ")[0]}
+                {(user?.full_name || "").split(" ")[0]}
               </span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>
               <div className="flex flex-col">
-                <span className="text-sm font-semibold">{CURRENT_USER.name}</span>
+                <span className="text-sm font-semibold">{user?.full_name}</span>
                 <span className="text-xs font-normal text-muted-foreground">
-                  {CURRENT_USER.email}
+                  {user?.email}
                 </span>
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Profile</DropdownMenuItem>
-            <DropdownMenuItem>Workspace settings</DropdownMenuItem>
-            <DropdownMenuItem>Billing</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate("/settings")}>Profile &amp; security</DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Sign out</DropdownMenuItem>
+            <DropdownMenuItem onClick={handleSignOut} data-testid="header-sign-out">Sign out</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

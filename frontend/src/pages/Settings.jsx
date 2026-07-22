@@ -3,12 +3,11 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import StatusBadge from "@/components/StatusBadge";
+import SecuritySettings from "@/modules/settings/SecuritySettings";
 
 const TEAM = [
   { name: "Maya Iyer", email: "maya@jawcom.io", role: "Admin", initials: "MI" },
@@ -159,24 +158,7 @@ export default function Settings() {
 
           {/* Security */}
           <TabsContent value="security">
-            <SettingCard title="Security" description="Protect your workspace.">
-              <div className="space-y-3">
-                <NotifRow label="Two-factor authentication" description="Require 2FA for all team members." defaultChecked />
-                <NotifRow label="Session timeout" description="Auto sign-out after 30 minutes of inactivity." />
-                <NotifRow label="IP allowlist" description="Restrict logins to known IPs." />
-                <NotifRow label="SSO (SAML)" description="Sign in with your identity provider." />
-              </div>
-              <Separator className="my-5" />
-              <div>
-                <Label>Audit log</Label>
-                <Textarea
-                  rows={4}
-                  defaultValue={"Feb 14, 10:42 — Maya signed in from Mumbai\nFeb 14, 09:01 — Rohan created campaign 'Demo Day Invite'\nFeb 13, 18:22 — Ana invited kenji@jawcom.io"}
-                  readOnly
-                  className="mt-1.5 font-mono text-xs"
-                />
-              </div>
-            </SettingCard>
+            <SecuritySettings />
           </TabsContent>
         </Tabs>
       </div>

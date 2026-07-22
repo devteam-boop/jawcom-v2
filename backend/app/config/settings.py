@@ -139,19 +139,59 @@ class Settings(BaseSettings):
         default=None, description="Shared bearer token for JAWIS<->JawCom hybrid communication auth",
     )
 
-    # JawCom's own agent session auth (Phase 3, Task 1) — distinct from
-    # JAWCOM_API_TOKEN above. This app has no per-user login system; this is
-    # a deliberately minimal shared-workspace passcode, NOT a multi-user
-    # auth system. A logged-in agent's session token is accepted (alongside
-    # JAWCOM_API_TOKEN) on /api/messages/* ONLY — never on
-    # /api/leads/*/journey/* or any other JAWIS-protected route, so a leaked
-    # agent session can never be used to impersonate JAWIS. See
-    # app/core/session_auth.py.
-    JAWCOM_APP_PASSWORD: Optional[str] = Field(
-        default=None, description="Shared passcode agents use to log in at /api/auth/login",
+    # Admin auth (replaces the old shared-workspace passcode — see
+    # app/core/admin_session.py / app/api/auth_routes.py). Real per-admin
+    # accounts (admin_users table), DB-backed opaque session tokens (no
+    # signing secret needed: the token itself is a 256-bit random value,
+    # only its SHA-256 hash is ever persisted). A valid admin session is
+    # accepted (alongside JAWCOM_API_TOKEN) on /api/messages/* and is
+    # REQUIRED on every other browser-facing route — never on
+    # /api/leads/*/journey/*, so a leaked admin session can never be used to
+    # impersonate JAWIS. See app/core/jawis_auth_middleware.py.
+    ADMIN_SESSION_COOKIE_NAME: str = Field(
+        default="jawcom_session", description="Name of the HttpOnly admin session cookie",
     )
-    JAWCOM_SESSION_SECRET: Optional[str] = Field(
-        default=None, description="HMAC signing key for agent session tokens issued by /api/auth/login",
+    ADMIN_SESSION_TTL_HOURS: int = Field(
+        default=12, description="Admin session lifetime in hours (default, 'Remember me' off)",
+    )
+    ADMIN_SESSION_REMEMBER_TTL_DAYS: int = Field(
+        default=30, description="Admin session lifetime in days when 'Remember me' is checked",
+    )
+    ADMIN_SESSION_COOKIE_SECURE: bool = Field(
+        default=True,
+        description="Set the Secure flag on the session cookie. Must be True in production "
+                    "(HTTPS only); only disable for plain-HTTP local dev.",
+    )
+    ADMIN_SESSION_COOKIE_SAMESITE: Literal["lax", "strict", "none"] = Field(
+        default="lax",
+        description="SameSite policy for the session cookie. Use 'none' (with Secure=True) when "
+                    "the frontend and backend are on different origins/domains.",
+    )
+    ADMIN_SESSION_COOKIE_DOMAIN: Optional[str] = Field(
+        default=None, description="Cookie Domain attribute, e.g. '.jawcom.io'. Leave unset for host-only.",
+    )
+    ADMIN_LOGIN_MAX_ATTEMPTS: int = Field(
+        default=5, description="Failed login attempts (per account) before the account is locked",
+    )
+    ADMIN_LOGIN_LOCKOUT_MINUTES: int = Field(
+        default=15, description="How long an account stays locked after ADMIN_LOGIN_MAX_ATTEMPTS is hit",
+    )
+    ADMIN_LOGIN_RATE_LIMIT_PER_IP: int = Field(
+        default=20, description="Max login attempts from a single IP within ADMIN_LOGIN_RATE_LIMIT_WINDOW_MINUTES",
+    )
+    ADMIN_LOGIN_RATE_LIMIT_WINDOW_MINUTES: int = Field(
+        default=15, description="Rolling window (minutes) for ADMIN_LOGIN_RATE_LIMIT_PER_IP",
+    )
+    ADMIN_OTP_TTL_MINUTES: int = Field(
+        default=10, description="Password-reset OTP validity window",
+    )
+    ADMIN_OTP_MAX_REQUESTS_PER_HOUR: int = Field(
+        default=5, description="Max forgot-password requests per account per rolling hour",
+    )
+    ADMIN_OTP_RECIPIENT_EMAIL: str = Field(
+        default="sales@nextmovein.com",
+        description="Fixed mailbox that receives every password-reset OTP — NEVER the requesting "
+                    "user's own address. The administrator relays the code internally.",
     )
     JAWIS_WEBHOOK_URL: Optional[str] = Field(
         default=None,

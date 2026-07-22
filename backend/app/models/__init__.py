@@ -9,6 +9,10 @@ from .template import Template, TemplateChannel, TemplateStatus
 from .communication_event import CommunicationEvent, CommunicationEventType, CommunicationEventChannel
 from .email_sync_state import EmailSyncState
 from .journey_send_idempotency import JourneySendIdempotency
+from .admin_user import AdminUser, AdminRole
+from .admin_session import AdminSession
+from .password_reset_otp import PasswordResetOTP
+from .admin_login_audit import AdminLoginAudit, AdminAuditEventType
 
 __all__ = [
     "Base",
@@ -29,4 +33,10 @@ __all__ = [
     "CommunicationEventChannel",
     "EmailSyncState",
     "JourneySendIdempotency",
+    "AdminUser",
+    "AdminRole",
+    "AdminSession",
+    "PasswordResetOTP",
+    "AdminLoginAudit",
+    "AdminAuditEventType",
 ]

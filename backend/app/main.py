@@ -31,6 +31,7 @@ from app.api import (
     lead_timeline_router,
     lead_journey_router,
     auth_router,
+    admin_account_router,
     ai_text_router,
 )
 from app.events.dispatcher import get_dispatcher
@@ -61,8 +62,9 @@ app.add_middleware(
     allow_headers=settings.cors_allow_headers,
 )
 
-# Bearer-token auth for JAWIS-facing routes (/api/messages/*,
-# /api/communication-events, /api/leads/{lead_id}/journey/*) — see
+# Auth gate for the whole app: JAWIS bearer-token auth on
+# /api/leads/{lead_id}/journey/*, JAWIS-or-admin-session on /api/messages/*,
+# and an admin session cookie required everywhere else under /api/* — see
 # app/core/jawis_auth_middleware.py.
 app.add_middleware(JawisAuthMiddleware)
 
@@ -93,6 +95,7 @@ app.include_router(email_sync_router)
 app.include_router(lead_timeline_router)
 app.include_router(lead_journey_router)
 app.include_router(auth_router)
+app.include_router(admin_account_router)
 app.include_router(ai_text_router)
 
 

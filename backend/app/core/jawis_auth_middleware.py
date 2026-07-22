@@ -1,33 +1,40 @@
-"""Bearer-token authentication for JAWIS-facing and agent-send routes.
+"""Auth gate for every route in the app — ASGI middleware (not per-route
+Depends()) so the check runs before FastAPI resolves the route, parses the
+body, or executes any business logic, for every HTTP method.
 
-Implemented as ASGI middleware (not a per-route Depends()) so the check is
-guaranteed to run before FastAPI resolves the route, parses the request
-body, or executes any business logic — including request validation (e.g.
-the required `stage` field) — for every HTTP method, not just POST.
+Three distinct credential types, deliberately not interchangeable:
 
-Two distinct route groups, two distinct secrets, deliberately not
-interchangeable:
-  - /api/leads/{lead_id}/journey/* — JAWIS-only. Accepts only the shared
-    JAWCOM_API_TOKEN. A logged-in agent's session token is NEVER accepted
-    here, so a leaked frontend session can never be used to start/resume a
-    journey as if it were JAWIS.
+  - /api/leads/{lead_id}/journey/* — JAWIS-only (machine-to-machine).
+    Accepts only the shared JAWCOM_API_TOKEN bearer token. An admin's
+    browser session is NEVER accepted here, so a leaked admin session can
+    never be used to impersonate JAWIS.
+
   - /api/messages/* (send_email, send_whatsapp, ...) — accepts EITHER the
-    JAWCOM_API_TOKEN (JAWIS) OR a valid agent session token (Phase 3, Task 1
-    — see app/core/session_auth.py). This is what lets the Inbox composer's
-    manual Send actually work without embedding the JAWIS shared secret in
-    the frontend bundle: agents log in (POST /api/auth/login) with a
-    separate, lower-privilege shared passcode and get a short-lived token
-    scoped to sends only.
+    JAWCOM_API_TOKEN (JAWIS's own manual-send/template-picker calls) OR a
+    valid admin session cookie (the Inbox composer's manual Send). This is
+    the only overlap between the two credential types, by design.
 
-GET /api/communication-events (and /{event_id}) is intentionally NOT
-protected: it's read-only (no POST exists on that router by design — see
-app/api/communication_event_routes.py), JAWIS never calls it ("JAWIS pulls
-nothing", per app/services/communication_event_service.py's _publish_to_jawis
-docstring — JawCom pushes to JAWIS via webhook instead), and it's the
-JawCom frontend's own primary data source (Inbox, Dashboard, Lead Activity,
-Execution Drawer) — those call it directly from the browser with no bearer
-token, same as the already-unprotected GET /api/leads/{lead_id}/timeline,
-which returns the same underlying data scoped to one lead.
+  - Everything else under /api/* — admin session cookie REQUIRED. This is
+    the "Only authenticated Admin users may access JawCom" requirement:
+    Dashboard, Contacts, Journeys, Templates, Campaigns,
+    /api/communication-events, etc. were previously open with no auth at
+    all; they now all require a logged-in admin, with NO secondary
+    passcode prompt anywhere after login.
+
+A handful of routes stay genuinely public because they're called by
+something other than an authenticated admin's browser: /health (platform
+health checks), /api/auth/login + forgot/reset-password (pre-auth by
+definition), /api/webhooks/meta + /api/webhooks/resend (signature-verified
+inbound provider webhooks), /api/webhooks/jawis (inbound JAWIS event
+bridge — unchanged, out of scope for this task), /api/email-sync/run (its
+own X-Webhook-Token, see app/api/email_sync_routes.py), and the OpenAPI/
+docs endpoints.
+
+CSRF: any state-changing request (non-GET/HEAD/OPTIONS) authenticated via
+the admin session cookie must also carry a matching X-CSRF-Token header
+(double-submit cookie — see app/core/csrf.py). JAWIS's bearer-token calls
+are exempt (server-to-server, no ambient browser credential, nothing for
+CSRF to exploit).
 """
 
 import re
@@ -37,7 +44,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.config.settings import get_settings
-from app.core.session_auth import verify_session_token
+from app.core.admin_session import verify_session
+from app.core.csrf import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, csrf_token_valid, requires_csrf_check
+from app.database.session import async_session_maker
 
 _JAWIS_ONLY_PATTERNS = (
     re.compile(r"^/api/leads/[^/]+/journey(/|$)"),
@@ -45,26 +54,76 @@ _JAWIS_ONLY_PATTERNS = (
 _AGENT_OR_JAWIS_PATTERNS = (
     re.compile(r"^/api/messages(/|$)"),
 )
+_PUBLIC_EXACT = {
+    "/health",
+    "/api/auth/login",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    "/api/webhooks/jawis",
+    "/api/openapi.json",
+    "/docs",
+    "/redoc",
+}
+_PUBLIC_PREFIXES = (
+    "/api/webhooks/meta",
+    "/api/webhooks/resend",
+    "/api/email-sync",
+)
 
 
 def _matches_any(path: str, patterns) -> bool:
     return any(p.match(path) for p in patterns)
 
 
+def _is_public(path: str) -> bool:
+    if path in _PUBLIC_EXACT:
+        return True
+    return any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES)
+
+
 class JawisAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+
+        if not path.startswith("/api/") and path not in _PUBLIC_EXACT:
+            # Nothing is served outside /api/* today (see app/main.py) —
+            # leave anything else untouched rather than guessing.
+            return await call_next(request)
+
+        if _is_public(path):
+            return await call_next(request)
+
         jawis_only = _matches_any(path, _JAWIS_ONLY_PATTERNS)
         agent_or_jawis = _matches_any(path, _AGENT_OR_JAWIS_PATTERNS)
 
-        if jawis_only or agent_or_jawis:
-            settings = get_settings()
-            auth_header = request.headers.get("authorization", "")
-            token = auth_header[7:] if auth_header.lower().startswith("bearer ") else None
+        settings = get_settings()
+        auth_header = request.headers.get("authorization", "")
+        bearer_token = auth_header[7:] if auth_header.lower().startswith("bearer ") else None
+        is_jawis = bool(settings.JAWCOM_API_TOKEN and bearer_token and bearer_token == settings.JAWCOM_API_TOKEN)
 
-            is_jawis = bool(settings.JAWCOM_API_TOKEN and token and token == settings.JAWCOM_API_TOKEN)
-            is_agent = agent_or_jawis and verify_session_token(token)
-
-            if not (is_jawis or is_agent):
+        if jawis_only:
+            if not is_jawis:
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            return await call_next(request)
+
+        if is_jawis and agent_or_jawis:
+            return await call_next(request)
+
+        # Every remaining path (including /api/messages/* when the caller
+        # isn't JAWIS) requires a logged-in admin.
+        session_cookie = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
+        async with async_session_maker() as db:
+            admin_user = await verify_session(db, session_cookie)
+            await db.commit()
+
+        if admin_user is None:
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+
+        if requires_csrf_check(request.method):
+            csrf_cookie = request.cookies.get(CSRF_COOKIE_NAME, "")
+            csrf_header = request.headers.get(CSRF_HEADER_NAME, "")
+            if not csrf_token_valid(csrf_cookie, csrf_header):
+                return JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
+
+        request.state.admin_user = admin_user
         return await call_next(request)

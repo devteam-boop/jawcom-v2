@@ -6,10 +6,11 @@ import { api } from "./apiClient";
  * manual (non-journey) send; the resulting communication_events row is
  * indistinguishable in storage from any other send (source="manual" in payload).
  *
- * `token` is the agent session token from useAgentSession() (Phase 3, Task 1)
- * — these routes are Bearer-protected and reject calls with no valid token.
+ * Auth is the logged-in admin's session cookie, sent automatically by the
+ * browser (see AuthContext / apiClient's credentials: "include") — no
+ * per-send token any more.
  */
 export const messageService = {
-  sendEmail: async (payload, token) => api.post("/api/messages/email/send", payload, { token }),
-  sendWhatsapp: async (payload, token) => api.post("/api/messages/whatsapp/send", payload, { token }),
+  sendEmail: async (payload) => api.post("/api/messages/email/send", payload),
+  sendWhatsapp: async (payload) => api.post("/api/messages/whatsapp/send", payload),
 };

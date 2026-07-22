@@ -14,18 +14,14 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
-  DialogFooter,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Send, Paperclip, Smile, Lock, Sparkles, Wand2, Scissors, Briefcase, Smile as SmileyIcon, Languages } from "lucide-react";
+import { Send, Paperclip, Smile, Sparkles, Wand2, Scissors, Briefcase, Smile as SmileyIcon, Languages } from "lucide-react";
 import { templateService } from "@/services/templates";
 import { whatsappTemplateService } from "@/services/whatsappTemplates";
 import { messageService } from "@/services/messages";
 import { aiTextService } from "@/services/aiText";
 import { aiAssistantService } from "@/services/aiAssistant";
 import { aiSummaryService } from "@/services/aiSummary";
-import { useAgentSession } from "@/hooks/useAgentSession";
 import { toast } from "sonner";
 
 const TRANSLATE_LANGUAGES = ["Spanish", "Hindi", "French", "Arabic", "Portuguese"];
@@ -47,12 +43,11 @@ const CUSTOM = "__custom__";
  * successful send lands in the same communication_events table a journey
  * send would, source="manual".
  *
- * Sending requires an agent session (Phase 3, Task 1) — those routes are
- * Bearer-protected (real WhatsApp/email spend if called by an untrusted
- * caller). Clicking Send with no session prompts an inline login
- * (POST /api/auth/login, a shared workspace passcode — see
- * backend/app/core/session_auth.py) rather than embedding any secret in
- * the frontend bundle.
+ * Sending requires the logged-in admin session — those routes accept
+ * either JAWIS's own bearer token or a valid admin session cookie (see
+ * backend/app/core/jawis_auth_middleware.py). No secondary passcode: the
+ * browser's session cookie (set at /login) covers every send, same as
+ * every other authenticated route in the app.
  *
  * WhatsApp always requires an approved template — Meta's Cloud API only
  * accepts template-addressed sends outside an active session, and this
@@ -66,7 +61,6 @@ const CUSTOM = "__custom__";
  * media backend exists.
  */
 export default function MessageComposer({ leadId, leadStage, onSent }) {
-  const { token, login } = useAgentSession();
   const [channel, setChannel] = useState("email");
   const [emailTemplates, setEmailTemplates] = useState([]);
   const [waTemplates, setWaTemplates] = useState([]);
@@ -75,11 +69,6 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
   const [body, setBody] = useState("");
   const [variables, setVariables] = useState({});
   const [sending, setSending] = useState(false);
-
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [password, setPassword] = useState("");
-  const [loginError, setLoginError] = useState(null);
-  const [loggingIn, setLoggingIn] = useState(false);
 
   const [aiBusy, setAiBusy] = useState(null); // which action is in flight, or null
   const [aiResult, setAiResult] = useState(null); // { title, text } shown in a dialog
@@ -178,7 +167,7 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
         : true
       : !!selectedWaTemplate && waVars.every((v) => (variables[v] || "").trim()));
 
-  const doSend = async (sessionToken) => {
+  const doSend = async () => {
     setSending(true);
     try {
       if (channel === "email") {
@@ -186,7 +175,7 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
           templateId === CUSTOM
             ? { lead_id: leadId, template_key: null, stage: leadStage, module: "general", variables: { subject, body } }
             : { lead_id: leadId, template_key: templateId, stage: leadStage, module: "general", variables };
-        const result = await messageService.sendEmail(payload, sessionToken);
+        const result = await messageService.sendEmail(payload);
         onSent?.({
           id: result.communication_event_id,
           event_type: "email_sent",
@@ -209,7 +198,7 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
           module: "general",
           variables,
         };
-        const result = await messageService.sendWhatsapp(payload, sessionToken);
+        const result = await messageService.sendWhatsapp(payload);
         onSent?.({
           id: result.communication_event_id,
           event_type: "whatsapp_sent",
@@ -233,27 +222,7 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
 
   const handleSend = async () => {
     if (!contentReady || sending) return;
-    if (!token) {
-      setLoginError(null);
-      setLoginOpen(true);
-      return;
-    }
-    await doSend(token);
-  };
-
-  const handleLogin = async () => {
-    setLoggingIn(true);
-    setLoginError(null);
-    try {
-      const newToken = await login(password);
-      setLoginOpen(false);
-      setPassword("");
-      await doSend(newToken);
-    } catch (err) {
-      setLoginError(err?.body?.detail || err.message || "Login failed");
-    } finally {
-      setLoggingIn(false);
-    }
+    await doSend();
   };
 
   return (
@@ -284,11 +253,6 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
         {!leadStage && (
           <span className="ml-2 text-[11px] text-amber-600 dark:text-amber-400">
             Lead stage unavailable — sending is disabled until JAWIS is reachable.
-          </span>
-        )}
-        {token && (
-          <span className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Lock className="h-3 w-3" /> Signed in
           </span>
         )}
       </div>
@@ -425,36 +389,6 @@ export default function MessageComposer({ leadId, leadStage, onSent }) {
           </Button>
         </div>
       </div>
-
-      <Dialog open={loginOpen} onOpenChange={setLoginOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Sign in to send</DialogTitle>
-            <DialogDescription>
-              Manual sends require an agent session. Enter the workspace passcode.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-1">
-            <Label htmlFor="agent-password">Passcode</Label>
-            <Input
-              id="agent-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              data-testid="agent-login-password"
-              autoFocus
-            />
-            {loginError && <p className="text-xs text-rose-600 dark:text-rose-400">{loginError}</p>}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setLoginOpen(false)}>Cancel</Button>
-            <Button onClick={handleLogin} disabled={loggingIn || !password} data-testid="agent-login-submit">
-              {loggingIn ? "Signing in…" : "Sign in & Send"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!aiResult} onOpenChange={(open) => !open && setAiResult(null)}>
         <DialogContent className="sm:max-w-md">

@@ -21,6 +21,7 @@ from .email_sync_routes import router as email_sync_router
 from .lead_timeline_routes import router as lead_timeline_router
 from .lead_journey_routes import router as lead_journey_router
 from .auth_routes import router as auth_router
+from .admin_account_routes import router as admin_account_router
 from .ai_text_routes import router as ai_text_router
 
 __all__ = [
@@ -47,5 +48,6 @@ __all__ = [
     "lead_timeline_router",
     "lead_journey_router",
     "auth_router",
+    "admin_account_router",
     "ai_text_router",
 ]
