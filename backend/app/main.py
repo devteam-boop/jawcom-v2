@@ -45,6 +45,17 @@ logger = get_logger(__name__)
 # Get settings
 settings = get_settings()
 
+if settings.CORS_ALLOW_CREDENTIALS and "*" in settings.cors_origins:
+    # Wildcard origins + credentialed requests must never be combined —
+    # any site could then read authenticated responses. CORS_ORIGINS must
+    # be an explicit, comma-separated allowlist (e.g.
+    # "https://jawcom-v2.vercel.app") whenever CORS_ALLOW_CREDENTIALS is
+    # true. Fails loud at startup rather than silently wildcarding.
+    raise RuntimeError(
+        "CORS_ALLOW_CREDENTIALS=true requires an explicit CORS_ORIGINS allowlist — "
+        "got '*'. Set CORS_ORIGINS to a comma-separated list of exact origins."
+    )
+
 # Create FastAPI app
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -53,7 +64,26 @@ app = FastAPI(
     version=settings.VERSION,
 )
 
-# Add CORS middleware
+# Registration order here is load-bearing, not incidental: Starlette's
+# app.add_middleware() prepends (LIFO) — the LAST middleware added ends up
+# OUTERMOST, running first on the way in. JawisAuthMiddleware must be
+# added BEFORE CORSMiddleware so CORSMiddleware ends up outermost and can
+# short-circuit OPTIONS preflight (and attach CORS headers to every
+# response, including 401s) before the request ever reaches the auth
+# check. Registering them in the opposite order (as this file previously
+# did) makes the auth middleware run first: it 401s bare, unauthenticated
+# preflight requests before CORSMiddleware gets a chance to run at all, so
+# the browser never sees an Access-Control-Allow-Origin header and reports
+# it as a CORS failure — this was the actual root cause of the production
+# "blocked by CORS" errors on /api/messages/*, not a CORS config problem.
+
+# Auth gate for the whole app: JAWIS bearer-token auth on
+# /api/leads/{lead_id}/journey/*, JAWIS-or-admin-session on /api/messages/*,
+# and an admin session cookie required everywhere else under /api/* — see
+# app/core/jawis_auth_middleware.py.
+app.add_middleware(JawisAuthMiddleware)
+
+# Add CORS middleware LAST so it wraps outermost (see note above).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -61,12 +91,6 @@ app.add_middleware(
     allow_methods=settings.cors_allow_methods,
     allow_headers=settings.cors_allow_headers,
 )
-
-# Auth gate for the whole app: JAWIS bearer-token auth on
-# /api/leads/{lead_id}/journey/*, JAWIS-or-admin-session on /api/messages/*,
-# and an admin session cookie required everywhere else under /api/* — see
-# app/core/jawis_auth_middleware.py.
-app.add_middleware(JawisAuthMiddleware)
 
 
 # Include Journey Engine routers

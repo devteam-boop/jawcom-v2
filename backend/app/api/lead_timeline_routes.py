@@ -68,6 +68,18 @@ async def get_lead_summary(lead_id: int):
     except JawisApiError as exc:
         logger.error("get_lead_summary: JAWIS unreachable for lead_id=%s: %s", lead_id, exc)
         raise HTTPException(status_code=502, detail="JAWIS is unreachable — lead identity unavailable")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Anything else (e.g. a pydantic ValidationError if JAWIS ever
+        # returns a lead shape LeadSummarySchema doesn't expect) previously
+        # propagated uncaught past this point — an unhandled exception here
+        # is what actually reaches the client as a bare crash. Logged in
+        # full (not swallowed) and turned into a clean, typed 502 instead,
+        # since it reflects a JAWIS-integration data problem, not a bug in
+        # this endpoint's own logic.
+        logger.exception("get_lead_summary: unexpected error resolving lead_id=%s", lead_id)
+        raise HTTPException(status_code=502, detail="Unexpected error resolving lead identity")
     if lead is None:
         raise HTTPException(status_code=404, detail=f"Lead {lead_id} not found")
     return LeadSummaryResponse(
