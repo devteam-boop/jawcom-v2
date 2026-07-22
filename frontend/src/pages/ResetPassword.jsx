@@ -93,7 +93,7 @@ export default function ResetPassword() {
                 required
               />
               <p className="text-xs text-muted-foreground">
-                12+ characters, with upper, lower, number and special character.
+                6+ characters, with upper, lower, number and special character.
               </p>
             </div>
 

@@ -14,7 +14,7 @@ from argon2.exceptions import VerifyMismatchError, InvalidHashError
 
 _hasher = PasswordHasher()
 
-_MIN_LENGTH = 12
+_MIN_LENGTH = 6
 _SPECIAL_CHARS = re.compile(r"[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?~`]")
 
 
@@ -44,7 +44,7 @@ def needs_rehash(password_hash: str) -> bool:
 
 def validate_password_policy(plain: str) -> Optional[str]:
     """Returns an error message, or None if the password satisfies policy:
-    12+ chars, upper, lower, number, special character."""
+    6+ chars, upper, lower, number, special character."""
     if len(plain) < _MIN_LENGTH:
         return f"Password must be at least {_MIN_LENGTH} characters"
     if not re.search(r"[A-Z]", plain):

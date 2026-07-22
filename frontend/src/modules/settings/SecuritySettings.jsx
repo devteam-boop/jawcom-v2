@@ -135,7 +135,7 @@ export default function SecuritySettings() {
         </div>
       </SettingCard>
 
-      <SettingCard title="Change password" description="12+ characters, upper, lower, number, and special character.">
+      <SettingCard title="Change password" description="6+ characters, upper, lower, number, and special character.">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="space-y-1.5">
             <Label htmlFor="sec-current-pw">Current password</Label>
