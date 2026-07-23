@@ -122,6 +122,21 @@ function TemplateSelectField({ channel, value, onChange }) {
 }
 
 function ConfigFields({ nodeType, config, onUpdateConfig, onUpdateConfigBatch }) {
+  // Condition's Operator <Select> below displays "equals" via a
+  // `config.operator || "equals"` fallback when nothing has been chosen yet
+  // — that fallback is display-only and was never written back into the
+  // node's persisted config, so a condition node whose dropdown was never
+  // explicitly touched serialized with no "operator" key at all (despite
+  // showing "Equals" in the UI), and flow_validation_service.py's
+  // `if not config.get("operator")` correctly flagged it as missing. This
+  // seeds the real default into config as soon as a condition node with no
+  // operator is shown, so what's displayed always matches what's persisted.
+  useEffect(() => {
+    if (nodeType === "condition" && !config.operator) {
+      onUpdateConfig("operator", "equals");
+    }
+  }, [nodeType, config.operator, onUpdateConfig]);
+
   switch (nodeType) {
     case "trigger":
       return (
