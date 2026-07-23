@@ -62,8 +62,25 @@ class VariableResolverService:
         """
         return self._resolve_path(path)
 
+    # Well-known nested namespaces this context always carries (see
+    # ExecutionContext.to_dict()) — used only as a fallback lookup for a
+    # bare, dot-less variable name that doesn't match a top-level context
+    # key, e.g. a template author writing {{first_name}} instead of the
+    # fully-qualified {{lead.first_name}}. Existing dotted paths are
+    # completely unaffected by this list.
+    _BARE_NAME_FALLBACK_NAMESPACES = ("lead", "company")
+
     def _resolve_path(self, path: str) -> Optional[Any]:
-        """Walk a dotted path through ``self._context``."""
+        """Walk a dotted path through ``self._context``.
+
+        A bare (dot-less) name that comes up empty at the top level is then
+        looked up inside the well-known nested namespaces above — e.g.
+        ``{{first_name}}`` resolves against ``lead.first_name`` without the
+        template needing the "lead." prefix. This only ever fires when the
+        direct top-level lookup for a single-segment path found nothing;
+        every existing dotted path (``{{lead.first_name}}``,
+        ``{{company.name}}``, ``{{today}}``, ...) resolves exactly as before.
+        """
         parts = path.split(".")
         current: Any = self._context
         for part in parts:
@@ -73,11 +90,22 @@ class VariableResolverService:
                 try:
                     current = current[int(part)]
                 except (IndexError, ValueError):
-                    return None
+                    current = None
+                    break
             elif hasattr(current, part):
                 current = getattr(current, part, None)
             else:
-                return None
+                current = None
+                break
             if current is None:
-                return None
+                break
+
+        if current is None and len(parts) == 1 and isinstance(self._context, dict):
+            for namespace in self._BARE_NAME_FALLBACK_NAMESPACES:
+                namespace_value = self._context.get(namespace)
+                if isinstance(namespace_value, dict):
+                    fallback_value = namespace_value.get(path)
+                    if fallback_value is not None:
+                        return fallback_value
+
         return current

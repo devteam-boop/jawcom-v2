@@ -53,7 +53,11 @@ _JAWIS_TEMPLATE_VARIABLE_MAP: Dict[str, list] = {
     "contacted_req_noted": ["first_name", "seats", "building_name"],
     "nudge_1": ["first_name", "building_name"],
     # Qualified
-    "options_share": ["seats", "building_name", "options_link"],
+    # Production template name is "lead_qualified_option_share" (not
+    # "options_share" — that key never matched, which was the root cause of
+    # this template silently falling through to the legacy name/phone/email
+    # fallback below instead of resolving semantically).
+    "lead_qualified_option_share": ["seats", "building_name", "options_link"],
     # Tour Scheduled
     "tour_confirm": ["building_name", "tour_datetime", "map_link", "agent_name"],
     "tour_remind_24h": ["tour_datetime", "building_name"],
