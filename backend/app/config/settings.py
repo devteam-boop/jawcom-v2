@@ -225,6 +225,14 @@ class Settings(BaseSettings):
     JAWIS_LEAD_PROVIDER: str = Field(
         default="dummy", description="Lead provider backend: dummy or jawis",
     )
+    JAWIS_LEAD_DATE_TIMEZONE: str = Field(
+        default="Asia/Kolkata",
+        description="Timezone assumed for a naive (no explicit offset) lead-owned datetime "
+                    "field (e.g. tour_datetime) when computing a Delay/Wait node's "
+                    "relative-to-lead-date schedule — matches the frontend's existing "
+                    "fixed-IST display convention (frontend/src/lib/dateFormat.js). Only "
+                    "affects the new relative/lead-date modes, not fixed-duration delays.",
+    )
     JAWIS_CRM_PROVIDER: str = Field(
         default="dummy", description="CRM integration backend: dummy or jawis",
     )

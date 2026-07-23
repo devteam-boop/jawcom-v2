@@ -33,7 +33,12 @@ class LeadProvider(ABC):
     """
 
     @abstractmethod
-    async def get_lead_context(self, lead_id: int) -> Dict[str, Any]:
+    async def get_lead_context(self, lead_id: int, force_refresh: bool = False) -> Dict[str, Any]:
+        """``force_refresh``: bypass any provider-level cache (JawisLeadProvider's
+        underlying JawisClient caches for 5 minutes) — used by
+        wait_condition_service.py when polling for a stage/field change, so
+        a change is never missed for up to 5 minutes. Every other existing
+        caller passes the default (False), unchanged behavior."""
         ...
 
 
@@ -43,7 +48,7 @@ class DummyLeadProvider(LeadProvider):
     Swap for ``JawisLeadProvider`` (future) when JAWIS is available.
     """
 
-    async def get_lead_context(self, lead_id: int) -> Dict[str, Any]:
+    async def get_lead_context(self, lead_id: int, force_refresh: bool = False) -> Dict[str, Any]:
         return {
             "lead": {
                 "id": lead_id,

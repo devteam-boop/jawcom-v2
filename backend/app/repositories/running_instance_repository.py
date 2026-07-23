@@ -18,6 +18,27 @@ class RunningInstanceRepository(BaseRepository[RunningJourneyInstance]):
         )
         return result.scalar_one_or_none()
 
+    async def get_for_update(self, id: UUID) -> Optional[RunningJourneyInstance]:
+        """Same as ``get`` but takes a row lock (``SELECT ... FOR UPDATE``).
+
+        Used only by ExecutionEngine._resume_from — a concurrent resume of
+        the same instance (a scheduler tick racing a manual API resume, or
+        two scheduler processes) would otherwise both read the same
+        `current_node_id`/`resume_at`/`wait_condition` and both proceed to
+        traverse, double-executing downstream nodes. Taking the lock here
+        serializes that decision; a second concurrent caller blocks until the
+        first's transaction commits, then sees the already-cleared pause
+        state and has nothing left to act on. Not used by the plain `get()`
+        call sites elsewhere (API reads, etc.) — this would be an
+        unnecessary locking cost for those.
+        """
+        result = await self.session.execute(
+            select(RunningJourneyInstance)
+            .where(RunningJourneyInstance.id == id)
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def get_all(
         self, skip: int = 0, limit: int = 100,
         journey_id: Optional[UUID] = None,

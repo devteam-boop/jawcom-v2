@@ -35,6 +35,13 @@ class RunningInstanceService:
             raise ValueError(f"RunningInstance {instance_id} not found")
         return self._to_schema(instance)
 
+    async def get_for_update(self, instance_id: UUID) -> RunningInstanceSchema:
+        """Row-locked variant of ``get`` — see RunningInstanceRepository.get_for_update."""
+        instance = await self.repo.get_for_update(instance_id)
+        if not instance:
+            raise ValueError(f"RunningInstance {instance_id} not found")
+        return self._to_schema(instance)
+
     async def update(
         self, instance_id: UUID, data: RunningInstanceUpdateSchema
     ) -> RunningInstanceSchema:
@@ -159,6 +166,31 @@ class RunningInstanceService:
             if resume_at_str and resume_at_str <= now_iso:
                 due.append(self._to_schema(inst))
         return due
+
+    async def find_waiting_with_condition(self) -> List[RunningInstanceSchema]:
+        """Return all ``waiting`` instances paused on an event-based Wait
+        (replied/stage_changed/field_condition/webhook_event) — i.e. those
+        with a `wait_condition` key in `data`, as opposed to time-based waits
+        which have `resume_at` instead (mutually exclusive by construction —
+        see WaitExecutor). This is a pure query (candidates only); actually
+        evaluating whether each candidate's condition is currently satisfied
+        is done by wait_condition_service.py, which calls this and then
+        checks fresh lead/CommunicationEvent data per instance — kept out of
+        this service to avoid coupling instance-querying to JAWIS/
+        CommunicationEvent concerns.
+
+        Uses the same ``limit=1000`` reasoning as find_due_delays: every
+        ordinary waiting instance is also ``status="waiting"``, so a low
+        default limit could silently miss event-based waits once volume
+        grows (time-based waits share this same status, but are filtered out
+        below by requiring `wait_condition` to be present).
+        """
+        instances = await self.repo.get_all(status=InstanceStatus.WAITING.value, limit=1000)
+        return [
+            self._to_schema(inst)
+            for inst in instances
+            if (inst.data or {}).get("wait_condition")
+        ]
 
     async def fail(self, instance_id: UUID) -> RunningInstanceSchema:
         instance = await self.repo.get(instance_id)

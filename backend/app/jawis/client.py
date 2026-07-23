@@ -141,26 +141,36 @@ class JawisClient:
                 nested.update(value)
         return {**nested, **lead_data}
 
-    async def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict[str, Any]:
+    async def _make_request(
+        self, endpoint: str, params: Optional[Dict] = None, force_refresh: bool = False,
+    ) -> Dict[str, Any]:
         """
         Make HTTP request to JAWIS API.
-        
+
         Args:
             endpoint: API endpoint path
             params: Query parameters
-            
+            force_refresh: Bypass the in-memory cache and hit JAWIS directly
+                (the fresh response is still cached afterward for subsequent
+                normal calls). Used by the Wait-node event scheduler
+                (wait_condition_service.py) when polling for a stage/field
+                change — the default 5-minute cache would otherwise delay
+                detecting a change by up to 5 minutes. Every other existing
+                caller is unaffected (default False, unchanged behavior).
+
         Returns:
             Response data
-            
+
         Raises:
             JawisApiError: If API request fails
         """
         # Check cache first
         cache_key = self._get_cache_key(endpoint, params)
-        cached_data = self._get_from_cache(cache_key)
-        if cached_data is not None:
-            logger.debug(f"Cache hit for {cache_key}")
-            return cached_data
+        if not force_refresh:
+            cached_data = self._get_from_cache(cache_key)
+            if cached_data is not None:
+                logger.debug(f"Cache hit for {cache_key}")
+                return cached_data
         
         try:
             client = await self._get_client()
@@ -195,9 +205,13 @@ class JawisClient:
                 raise
             raise JawisApiError(f"Unexpected error: {str(e)}")
     
-    async def get_lead(self, lead_id: str) -> Optional[LeadSummarySchema]:
+    async def get_lead(self, lead_id: str, force_refresh: bool = False) -> Optional[LeadSummarySchema]:
         """
         Get lead information by ID.
+
+        force_refresh: bypass the in-memory cache — see _make_request's
+        docstring. Default False, unchanged behavior for every existing
+        caller.
 
         Uses LeadSummarySchema (id/name/email/phone/city/stage/first_name/
         last_name/company/building_name/agent_name/seats/plan_type/
@@ -228,7 +242,7 @@ class JawisClient:
             LeadSummarySchema if found, None otherwise
         """
         try:
-            data = await self._make_request(f"/api/leads/{lead_id}")
+            data = await self._make_request(f"/api/leads/{lead_id}", force_refresh=force_refresh)
 
             # Supports both the legacy unwrapped shape ({"lead": {...}}) and
             # the current {"success": ..., "data": {"lead": {...}}} shape —
@@ -323,9 +337,12 @@ class JawisClient:
             logger.error(f"Error fetching user {user_id}: {str(e)}")
             raise
     
-    async def get_lead_context(self, lead_id: str) -> Optional[LeadContextSchema]:
+    async def get_lead_context(self, lead_id: str, force_refresh: bool = False) -> Optional[LeadContextSchema]:
         """
         Get lead context (lead + current stage) for communication/execution.
+
+        force_refresh: bypass the in-memory cache — see get_lead's docstring.
+        Default False, unchanged behavior for every existing caller.
 
         Previously looked up a full StageSchema via get_stage(lead.stage_key)
         and also fetched company/assigned_user via lead.company_id/
@@ -354,7 +371,7 @@ class JawisClient:
             found, no stage on the lead, or a request error) — never a
             fabricated stand-in.
         """
-        lead = await self.get_lead(lead_id)
+        lead = await self.get_lead(lead_id, force_refresh=force_refresh)
         if not lead:
             return None
 

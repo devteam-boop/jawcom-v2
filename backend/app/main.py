@@ -17,6 +17,7 @@ from app.api import (
     execution_router,
     approval_router,
     task_router,
+    journey_event_router,
     template_router,
     whatsapp_template_router,
     integration_router,
@@ -105,6 +106,7 @@ app.include_router(flow_execution_log_router)
 app.include_router(execution_router)
 app.include_router(approval_router)
 app.include_router(task_router)
+app.include_router(journey_event_router)
 app.include_router(template_router)
 app.include_router(whatsapp_template_router)
 app.include_router(integration_router)

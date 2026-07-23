@@ -438,6 +438,25 @@ class ExecutionEngine:
                             UUID(instance.id), RunningInstanceUpdateSchema(data=current_data),
                         )
                         logger.info("Delay node %s paused until %s", node_id, resume_at)
+                elif updated_ctx.get("_wait_condition"):
+                    # Event-based Wait (replied/stage_changed/field_condition/
+                    # webhook_event) — no resume_at at all; reuses the
+                    # existing "waiting" status (no new InstanceStatus value,
+                    # no migration) so the scheduler's existing find_waiting-
+                    # style query pattern extends cleanly via
+                    # RunningInstanceService.find_due_events(). Resolved by
+                    # wait_condition_service.py (scheduler poll) or, for
+                    # webhook_event, the dedicated trigger-event route —
+                    # both ultimately call engine.resume_instance(), same as
+                    # every other pause type here.
+                    current_data["wait_condition"] = updated_ctx["_wait_condition"]
+                    current_data["_pause_reason"] = "event"
+                    current_data["_pause_node_id"] = node_id
+                    await instance_service.wait(UUID(instance.id), current_data)
+                    logger.info(
+                        "Wait node %s paused on event condition %s",
+                        node_id, updated_ctx["_wait_condition"],
+                    )
                 else:
                     # Plain skip with no special handling — just update data
                     await instance_service.update(
@@ -692,17 +711,51 @@ class ExecutionEngine:
                 event_service = CommunicationEventService(session)
                 lead_provider: LeadProvider = LeadProviderFactory.get_provider()
 
-                instance = await instance_service.get(instance_id)
+                # Row-locked read (SELECT ... FOR UPDATE) — see
+                # RunningInstanceRepository.get_for_update's docstring.
+                # Serializes concurrent resume attempts for the same
+                # instance (a scheduler tick racing a manual/webhook resume,
+                # or two scheduler processes) so the duplicate-resume guard
+                # below can reliably tell whether it's the first or a
+                # subsequent caller.
+                instance = await instance_service.get_for_update(instance_id)
                 journey = await journey_service.get(UUID(instance.journey_id))
 
                 flow_def = await self._load_flow_definition(journey)
                 if flow_def is None:
                     return False
 
+                instance_data = dict(instance.data or {})
+
+                # Idempotency guard — only meaningful for the scheduler/
+                # webhook resume path (skip_current=True); retries are
+                # explicit user actions and always proceed regardless. If a
+                # concurrent caller already claimed and cleared this
+                # instance's time/event pause markers before we acquired the
+                # row lock above, there's nothing left for THIS caller to
+                # do — returning early avoids double-traversing (double
+                # sends, double stage changes, etc.). Approval/task pauses
+                # are identified by `_pause_reason` and never rely on
+                # resume_at/wait_condition, so they're untouched by this
+                # check.
+                pause_reason = instance_data.get("_pause_reason")
+                if (
+                    skip_current
+                    and pause_reason not in ("approval", "task")
+                    and not instance_data.get("resume_at")
+                    and not instance_data.get("wait_condition")
+                    and instance_data.get("current_node_id")
+                ):
+                    logger.info(
+                        "Engine._resume_from: instance %s has no pending resume_at/"
+                        "wait_condition (already resumed by a concurrent caller) — "
+                        "skipping duplicate resume",
+                        instance_id,
+                    )
+                    return True
+
                 lead_context = await lead_provider.get_lead_context(instance.lead_id)
                 execution_time = datetime.utcnow()
-
-                instance_data = dict(instance.data or {})
                 ctx_dict: Dict[str, Any] = {
                     "trigger_stage_key": instance_data.get("trigger_stage_key", "unknown"),
                     "flow_definition_id": str(flow_def.id),
@@ -744,9 +797,18 @@ class ExecutionEngine:
                     await instance_service.fail(instance_id)
                     return False
 
-                # Clean up resume metadata from instance data
+                # Clean up resume metadata from instance data. wait_condition/
+                # the "event" pause markers are only ever set by the new
+                # event-based Wait branch (engine.py's _wait_condition
+                # handling) — popping them here is a no-op for every other
+                # pause type (approval/task pop their own differently-named
+                # markers themselves, before calling resume_instance()).
                 clean_data = dict(instance_data)
                 clean_data.pop("resume_at", None)
+                clean_data.pop("wait_condition", None)
+                if clean_data.get("_pause_reason") == "event":
+                    clean_data.pop("_pause_reason", None)
+                    clean_data.pop("_pause_node_id", None)
 
                 if skip_current:
                     if start_node.get("type") == "wait":

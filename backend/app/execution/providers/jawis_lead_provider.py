@@ -21,9 +21,9 @@ class JawisLeadProvider(LeadProvider):
     and executors require zero changes.
     """
 
-    async def get_lead_context(self, lead_id: int) -> Dict[str, Any]:
+    async def get_lead_context(self, lead_id: int, force_refresh: bool = False) -> Dict[str, Any]:
         client = get_jawis_client()
-        ctx = await client.get_lead_context(str(lead_id))
+        ctx = await client.get_lead_context(str(lead_id), force_refresh=force_refresh)
 
         if ctx is None:
             # Only reached on a genuine failure now (lead not found, no

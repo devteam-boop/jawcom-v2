@@ -168,20 +168,83 @@ class FlowValidationService:
             lbl = _label(node)
 
             if ntype == "delay":
-                duration = config.get("duration", 0)
-                if not isinstance(duration, (int, float)) or duration <= 0:
-                    errors.append(_node_error(
-                        f"Delay '{lbl}' must have duration greater than 0",
-                        node_id=nid,
-                    ))
+                mode = config.get("mode", "fixed")
+                if mode == "relative_to_lead_date":
+                    if not config.get("lead_date_field"):
+                        errors.append(_node_error(
+                            f"Delay '{lbl}' (relative to lead date) requires a lead date field",
+                            node_id=nid,
+                        ))
+                    if config.get("offset_unit") not in ("minutes", "hours", "days", "weeks"):
+                        errors.append(_node_error(
+                            f"Delay '{lbl}' (relative to lead date) requires a valid offset unit",
+                            node_id=nid,
+                        ))
+                else:
+                    # Fixed mode (default — every existing saved Delay node
+                    # with no "mode" key at all validates exactly as before).
+                    duration = config.get("duration", 0)
+                    if not isinstance(duration, (int, float)) or duration <= 0:
+                        errors.append(_node_error(
+                            f"Delay '{lbl}' must have duration greater than 0",
+                            node_id=nid,
+                        ))
 
             elif ntype == "wait":
-                duration = config.get("duration", 0)
-                if not isinstance(duration, (int, float)) or duration <= 0:
-                    errors.append(_node_error(
-                        f"Wait '{lbl}' must have duration greater than 0",
-                        node_id=nid,
-                    ))
+                wait_type = config.get("wait_type", "duration")
+                if wait_type == "specific_datetime":
+                    if not config.get("target_datetime") and not config.get("target_lead_field"):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' (specific date/time) requires a target datetime or lead date field",
+                            node_id=nid,
+                        ))
+                elif wait_type in ("stage_changed", "field_condition"):
+                    if not config.get("field"):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' requires a field to watch",
+                            node_id=nid,
+                        ))
+                    if not config.get("operator"):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' requires an operator",
+                            node_id=nid,
+                        ))
+                    if not config.get("value"):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' requires a value",
+                            node_id=nid,
+                        ))
+                elif wait_type == "manual_approval":
+                    # Mirrors the standalone Approval node's own validation
+                    # below — same required fields, same contract.
+                    if not config.get("approver"):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' (manual approval) requires an approver",
+                            node_id=nid,
+                        ))
+                    if not config.get("title"):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' (manual approval) requires a title",
+                            node_id=nid,
+                        ))
+                elif wait_type == "webhook_event":
+                    if not config.get("event_key"):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' (external webhook/event) requires an event key",
+                            node_id=nid,
+                        ))
+                elif wait_type == "replied":
+                    pass  # channel defaults to "whatsapp" — nothing required
+                else:
+                    # "duration" (default — every existing saved Wait node
+                    # with no "wait_type" key at all validates exactly as
+                    # before).
+                    duration = config.get("duration", 0)
+                    if not isinstance(duration, (int, float)) or duration <= 0:
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' must have duration greater than 0",
+                            node_id=nid,
+                        ))
 
             elif ntype == "send_whatsapp":
                 # Accepts EITHER field: the Properties Panel's template

@@ -7,6 +7,7 @@ from .flow_execution_log_routes import router as flow_execution_log_router
 from .execution_routes import router as execution_router
 from .approval_routes import router as approval_router
 from .task_routes import router as task_router
+from .journey_event_routes import router as journey_event_router
 from .template_routes import router as template_router
 from .whatsapp_template_routes import router as whatsapp_template_router
 from .integration_routes import router as integration_router
@@ -34,6 +35,7 @@ __all__ = [
     "execution_router",
     "approval_router",
     "task_router",
+    "journey_event_router",
     "template_router",
     "whatsapp_template_router",
     "integration_router",
