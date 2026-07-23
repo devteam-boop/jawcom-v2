@@ -71,10 +71,22 @@ function toRfEdges(apiEdges) {
       const source = e.source ?? e.from;
       const target = e.target ?? e.to;
       if (source == null || target == null) return null;
+      // sourceHandle/targetHandle distinguish a Condition node's independent
+      // "yes"/"no" outputs (see ConditionNode.jsx) — without them, React
+      // Flow falls back to the node's default handle for every edge, so
+      // both branches visually render from the same output. Backend field
+      // names are snake_case (EdgeSchema.source_handle/target_handle);
+      // React Flow's edge props are camelCase — `?? undefined` (not `|| ""`)
+      // so a genuinely handle-less edge (e.g. a plain single-output node)
+      // still omits the prop entirely rather than passing an empty string.
+      const sourceHandle = e.source_handle ?? e.sourceHandle ?? undefined;
+      const targetHandle = e.target_handle ?? e.targetHandle ?? undefined;
       return {
-        id: `e-${source}-${target}-${i}`,
+        id: `e-${source}-${target}-${sourceHandle || "default"}-${i}`,
         source,
         target,
+        sourceHandle,
+        targetHandle,
         label: e.label || "",
         type: "smoothstep",
         markerEnd: { type: MarkerType.ArrowClosed },
@@ -98,6 +110,15 @@ function toApiEdges(rfEdges) {
   return (rfEdges || []).map((e) => ({
     from: e.source,
     to: e.target,
+    // Previously dropped entirely — every edge round-tripped through
+    // Save/Reload lost which handle it came from, so a Condition node's
+    // "yes" and "no" edges (see ConditionNode.jsx's two named source
+    // handles) became indistinguishable and both rendered from the same
+    // default output on reload. Backend's EdgeSchema already has
+    // source_handle/target_handle (snake_case) — only the frontend was
+    // failing to read/write them.
+    source_handle: e.sourceHandle ?? null,
+    target_handle: e.targetHandle ?? null,
     label: e.label || "",
   }));
 }
