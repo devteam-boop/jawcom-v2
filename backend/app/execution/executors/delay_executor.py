@@ -57,6 +57,11 @@ class DelayExecutor(BaseNodeExecutor):
             "DelayExecutor: delaying %s %s until %s for lead=%s node=%s",
             duration, unit, resume_at_iso, lead_id, node_id,
         )
+        # TEMPORARY DIAGNOSTIC LOG — Delay node resume investigation.
+        logger.info(
+            "Delay scheduled: lead_id=%s node_id=%s resume_at=%s",
+            lead_id, node_id, resume_at_iso,
+        )
 
         output_data = {
             "duration": duration,

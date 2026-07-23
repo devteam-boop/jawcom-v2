@@ -69,26 +69,60 @@ class SchedulerService:
             await asyncio.sleep(self._interval)
 
     async def _poll_once(self) -> None:
-        """Find all waiting instances with expired resume_at and resume them."""
+        """Find all waiting instances AND due Delay-node instances with
+        expired resume_at, and resume them.
+
+        Waiting instances (Wait/Approval/ManualTask nodes) and Delay-node
+        instances are tracked differently — DelayExecutor deliberately keeps
+        the instance in ``running`` status instead of transitioning it to
+        ``waiting`` (see delay_executor.py), so they need a separate query
+        (RunningInstanceService.find_due_delays) — find_waiting() alone never
+        sees them. Both sets resume through the same
+        ExecutionEngine.resume_instance() call.
+        """
         from app.services.running_instance_service import RunningInstanceService
         from app.database.session import async_session_maker
 
+        now = datetime.utcnow()
         factory = self._session_factory or async_session_maker
         async with factory() as session:
             service = RunningInstanceService(session)
-            due = await service.find_waiting(datetime.utcnow())
+            waiting_due = await service.find_waiting(now)
+            delays_due = await service.find_due_delays(now)
 
+        # TEMPORARY DIAGNOSTIC LOG — Scheduler tick (see Delay node
+        # resume investigation). Fires every poll, not just when something
+        # is due, so a poll interval / dead-scheduler problem is
+        # distinguishable from a "nothing is due yet" one.
+        logger.info(
+            "Scheduler tick: current_time=%s number_of_due_delays=%d number_of_due_waits=%d",
+            now.isoformat(), len(delays_due), len(waiting_due),
+        )
+
+        due = waiting_due + delays_due
         if not due:
             return
 
-        logger.info("Scheduler found %d waiting instance(s) to resume", len(due))
+        logger.info("Scheduler found %d instance(s) to resume (%d waiting, %d delayed)",
+                     len(due), len(waiting_due), len(delays_due))
+
+        delay_instance_ids = {inst.id for inst in delays_due}
 
         engine = ExecutionEngine(self._session_factory)
         for inst in due:
+            scheduled_time = (inst.data or {}).get("resume_at")
+            node_id = (inst.data or {}).get("current_node_id")
             try:
                 success = await engine.resume_instance(UUID(inst.id))
                 if success:
                     logger.info("Resumed instance %s", inst.id)
+                    if inst.id in delay_instance_ids:
+                        # TEMPORARY DIAGNOSTIC LOG — Delay resumed.
+                        actual_resume_time = datetime.utcnow()
+                        logger.info(
+                            "Delay resumed: lead_id=%s node_id=%s scheduled_time=%s actual_resume_time=%s",
+                            inst.lead_id, node_id, scheduled_time, actual_resume_time.isoformat(),
+                        )
                 else:
                     logger.warning("Failed to resume instance %s", inst.id)
             except Exception as exc:

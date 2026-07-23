@@ -127,6 +127,39 @@ class RunningInstanceService:
                 due.append(self._to_schema(inst))
         return due
 
+    async def find_due_delays(
+        self, now: Optional[datetime] = None,
+    ) -> List[RunningInstanceSchema]:
+        """Return all ``running`` instances paused on a Delay node whose
+        resume_at <= now.
+
+        Root-cause fix: unlike Wait nodes, DelayExecutor deliberately leaves
+        the instance in ``running`` status (see delay_executor.py's
+        docstring) with `resume_at` stored in `data` — it never transitions
+        through :meth:`wait`. find_waiting() above only ever queries
+        ``status="waiting"``, so a Delay-paused instance was invisible to the
+        scheduler forever; this is the query find_waiting() was missing.
+        A plain in-flight ``running`` instance has no `resume_at` key at all
+        (only set by DelayExecutor, and popped again on resume — see
+        ExecutionEngine._resume_from), so this can't accidentally match an
+        instance that isn't actually paused on a delay.
+
+        ``limit=1000`` (repository default is 100) since every ordinarily
+        in-flight instance is also ``status="running"`` — a low default limit
+        here could silently miss due delays once volume grows.
+        """
+        if now is None:
+            now = datetime.utcnow()
+        now_iso = now.isoformat()
+        instances = await self.repo.get_all(status=InstanceStatus.RUNNING.value, limit=1000)
+        due = []
+        for inst in instances:
+            data = inst.data or {}
+            resume_at_str = data.get("resume_at")
+            if resume_at_str and resume_at_str <= now_iso:
+                due.append(self._to_schema(inst))
+        return due
+
     async def fail(self, instance_id: UUID) -> RunningInstanceSchema:
         instance = await self.repo.get(instance_id)
         if not instance:
