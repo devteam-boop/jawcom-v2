@@ -40,7 +40,8 @@ class JawisLeadProvider(LeadProvider):
             fallback = {
                 "lead": {
                     "id": lead_id, "name": "Unknown", "email": None, "phone": None,
-                    "city": None, "first_name": None, "building_name": None, "agent_name": None,
+                    "city": None, "first_name": None, "last_name": None, "company": None,
+                    "building_name": None, "agent_name": None,
                     "seats": None, "options_link": None, "tour_datetime": None, "map_link": None,
                     "plan_type": None, "proposal_link": None, "price": None, "move_in_date": None,
                 },
@@ -57,18 +58,22 @@ class JawisLeadProvider(LeadProvider):
         owner = ctx.assigned_user
 
         # lead is a LeadSummarySchema (id/name/email/phone/city/first_name/
-        # building_name/agent_name/stage) — company_id/assigned_to/metadata
-        # are no longer part of what JAWIS returns for a lead, so they're not
-        # read here; company/owner stay None (client.get_lead_context() no
-        # longer fetches them either — nothing left to fetch them by).
+        # last_name/company/building_name/agent_name/stage) — company_id/
+        # assigned_to are no longer part of what JAWIS returns for a lead, so
+        # they're not read here; company/owner stay None (client.
+        # get_lead_context() no longer fetches them either — nothing left to
+        # fetch them by).
         #
-        # city/first_name/building_name/agent_name (plus the later-stage
-        # production journeys' seats/options_link/tour_datetime/map_link/
-        # plan_type/proposal_link/price/move_in_date) are passed through
-        # here (previously `city` was silently dropped despite being on the
-        # schema) so the JAWIS variable resolver (SendWhatsAppExecutor) can
-        # read them off exec_ctx.lead — see docs on LeadSummarySchema for why
-        # a missing one becomes None rather than a guessed value.
+        # city/first_name/last_name/company/building_name/agent_name (plus
+        # the later-stage production journeys' seats/options_link/
+        # tour_datetime/map_link/plan_type/proposal_link/price/move_in_date)
+        # are passed through here (previously `city` was silently dropped
+        # despite being on the schema, and the rest resolved to None because
+        # JawisClient.get_lead() only read flat top-level keys — see
+        # JawisClient._flatten_lead_data for the actual fix) so the JAWIS
+        # variable resolver (SendWhatsAppExecutor) can read them off
+        # exec_ctx.lead — see docs on LeadSummarySchema for why a genuinely
+        # missing one still becomes None rather than a guessed value.
         result: Dict[str, Any] = {
             "lead": {
                 "id": lead.id,
@@ -77,6 +82,8 @@ class JawisLeadProvider(LeadProvider):
                 "phone": lead.phone,
                 "city": lead.city,
                 "first_name": lead.first_name,
+                "last_name": lead.last_name,
+                "company": lead.company,
                 "building_name": lead.building_name,
                 "agent_name": lead.agent_name,
                 "seats": lead.seats,

@@ -112,7 +112,35 @@ class JawisClient:
             "data": data,
             "cached_at": datetime.utcnow()
         }
-    
+
+    @staticmethod
+    def _flatten_lead_data(lead_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Surface a JAWIS lead's semantic fields regardless of whether they
+        arrive at the top level or nested under `custom_fields`/`metadata`.
+
+        Root cause of first_name/building_name/seats/etc. resolving to None
+        everywhere downstream (JawisLeadProvider, SendWhatsAppExecutor): the
+        previous code passed `lead_data` straight into LeadSummarySchema, so
+        it only ever saw whatever was flat at the top level. JAWIS's real
+        `lead` object carries the CRM-specific fields (building_name/seats/
+        plan_type/agent_name/options_link/tour_datetime/map_link/
+        proposal_link/price/move_in_date/first_name/last_name/company) inside
+        a nested `custom_fields` (or, on some responses, `metadata`)
+        sub-object instead — the exact same "extra data lives in a sibling/
+        nested container, not flat" shape already documented for `stage`
+        above. Merging the nested dict in FIRST means an explicit top-level
+        key (should JAWIS ever start sending one directly) still wins over
+        its nested copy, rather than being clobbered by it.
+        """
+        if not isinstance(lead_data, dict):
+            return lead_data
+        nested = {}
+        for key in ("custom_fields", "metadata"):
+            value = lead_data.get(key)
+            if isinstance(value, dict):
+                nested.update(value)
+        return {**nested, **lead_data}
+
     async def _make_request(self, endpoint: str, params: Optional[Dict] = None) -> Dict[str, Any]:
         """
         Make HTTP request to JAWIS API.
@@ -171,13 +199,27 @@ class JawisClient:
         """
         Get lead information by ID.
 
-        Uses LeadSummarySchema (id/name/email/phone/city/stage) — the
-        lightweight lead lookup used for message sending and lead context.
-        JAWIS's lead endpoint no longer returns stage_key/created_at/
-        updated_at, so LeadSchema (which requires them) is no longer usable
-        here. The lead's current stage is returned as a plain string
-        alongside (not inside) "lead" in the response body — captured onto
-        the returned object's `.stage` below.
+        Uses LeadSummarySchema (id/name/email/phone/city/stage/first_name/
+        last_name/company/building_name/agent_name/seats/plan_type/
+        options_link/tour_datetime/map_link/proposal_link/price/
+        move_in_date) — the lightweight lead lookup used for message sending
+        and lead context. JAWIS's lead endpoint no longer returns stage_key/
+        created_at/updated_at, so LeadSchema (which requires them) is no
+        longer usable here. The lead's current stage is returned as a plain
+        string alongside (not inside) "lead" in the response body — captured
+        onto the returned object's `.stage` below.
+
+        Root cause this docstring used to miss: JAWIS's `lead` object puts
+        the semantic fields above (building_name/seats/agent_name/etc.)
+        under a nested `custom_fields`/`metadata` sub-object rather than as
+        flat top-level keys, the same way `stage` is a sibling of `lead`
+        rather than nested inside it. Spreading `lead_data` directly into
+        LeadSummarySchema (the previous behavior) only ever saw the flat
+        top-level keys (id/name/email/phone/city), so every semantic field
+        silently resolved to its Optional[...] default of None — not a
+        missing-data problem, a wrong-extraction-path one. `_flatten_lead_data`
+        below merges the nested container's keys in first, so top-level keys
+        (if JAWIS ever sends one directly) still win over the nested copy.
 
         Args:
             lead_id: Lead ID from JAWIS
@@ -203,10 +245,13 @@ class JawisClient:
             # can use it without a separate, no-longer-possible stage_key
             # lookup.
             stage_value = payload.get("stage") if isinstance(payload, dict) else None
-            result = LeadSummarySchema(**{**lead_data, "stage": stage_value})
+            flattened_lead_data = self._flatten_lead_data(lead_data)
+            result = LeadSummarySchema(**{**flattened_lead_data, "stage": stage_value})
             logger.info(
-                "JawisClient.get_lead: lead_id=%s name=%s phone=%s email=%s stage=%s",
+                "JawisClient.get_lead: lead_id=%s name=%s phone=%s email=%s stage=%s "
+                "first_name=%s building_name=%s seats=%s",
                 lead_id, result.name, result.phone, result.email, result.stage,
+                result.first_name, result.building_name, result.seats,
             )
             return result
         except JawisApiError as e:

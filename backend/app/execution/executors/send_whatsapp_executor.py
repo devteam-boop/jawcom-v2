@@ -46,7 +46,11 @@ _JAWIS_FOUR_VARIABLE_FIELD_ORDER = ["first_name", "building_name", "city", "agen
 # guessing (see the missing-variable branch below).
 _JAWIS_TEMPLATE_VARIABLE_MAP: Dict[str, list] = {
     # Follow-Up
-    "req_noted": ["first_name", "seats", "building_name"],
+    # Production template name is "contacted_req_noted" (not "req_noted" —
+    # that key never matched, which was the root cause of this template
+    # silently falling through to the legacy name/phone/email fallback
+    # below instead of resolving semantically).
+    "contacted_req_noted": ["first_name", "seats", "building_name"],
     "nudge_1": ["first_name", "building_name"],
     # Qualified
     "options_share": ["seats", "building_name", "options_link"],

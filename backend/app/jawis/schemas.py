@@ -38,13 +38,17 @@ class LeadSummarySchema(BaseModel):
     which required stage_key/created_at/updated_at, is unusable here since
     JAWIS no longer sends those).
 
-    ``first_name``/``building_name``/``agent_name`` (and, for the later-stage
-    production journeys' WhatsApp/email templates, ``seats``/``options_link``/
-    ``plan_type``/``price``/``tour_datetime``/``map_link``/``proposal_link``/
-    ``move_in_date``) are additive, optional fields for the JAWIS variable
-    resolver (see ``SendWhatsAppExecutor``) — declared here so they pass
-    through if JAWIS's lead payload includes them; if JAWIS omits one, it
-    resolves to None rather than being fabricated from ``name``/elsewhere.
+    ``first_name``/``last_name``/``company``/``building_name``/``agent_name``
+    (and, for the later-stage production journeys' WhatsApp/email templates,
+    ``seats``/``options_link``/``plan_type``/``price``/``tour_datetime``/
+    ``map_link``/``proposal_link``/``move_in_date``) are additive, optional
+    fields for the JAWIS variable resolver (see ``SendWhatsAppExecutor``) —
+    declared here so they pass through if JAWIS's lead payload includes them;
+    if JAWIS omits one, it resolves to None rather than being fabricated from
+    ``name``/elsewhere. JAWIS may nest these under the lead's own
+    ``custom_fields``/``metadata`` object rather than at the top level of the
+    lead payload — see ``JawisClient.get_lead()``, which merges both shapes
+    before this schema is constructed so either wire format populates them.
     """
 
     id: str = Field(..., description="Lead ID from JAWIS")
@@ -53,6 +57,8 @@ class LeadSummarySchema(BaseModel):
     phone: Optional[str] = Field(None, description="Lead phone number")
     city: Optional[str] = Field(None, description="Lead city")
     first_name: Optional[str] = Field(None, description="Lead first name (JAWIS-provided, never derived from `name`)")
+    last_name: Optional[str] = Field(None, description="Lead last name (JAWIS-provided, never derived from `name`)")
+    company: Optional[str] = Field(None, description="Lead's company/organization name")
     building_name: Optional[str] = Field(None, description="Building/property name associated with the lead")
     agent_name: Optional[str] = Field(None, description="Name of the agent assigned to the lead")
     seats: Optional[str] = Field(None, description="Seat/unit count of interest (Follow-Up/Qualified stage templates)")
