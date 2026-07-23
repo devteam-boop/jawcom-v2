@@ -100,3 +100,14 @@ elif _email_backend == "dummy":
     IntegrationFactory.register_alias("email", "email_dummy")
 else:
     IntegrationFactory.register_alias("email", "email_jawis")
+
+# ── Set up the "notification" alias ──────────────────────────────────
+# Same pattern as "whatsapp"/"email" above. Default is "jawis" so the
+# Journey Builder's Notification node calls the real JAWIS notification API
+# out of the box; "dummy" keeps the pre-existing simulated behavior for
+# local dev/testing.
+_notification_backend = os.environ.get("JAWIS_NOTIFICATION_PROVIDER", "jawis")
+if _notification_backend == "dummy":
+    IntegrationFactory.register_alias("notification", "notification_dummy")
+else:
+    IntegrationFactory.register_alias("notification", "notification_jawis")

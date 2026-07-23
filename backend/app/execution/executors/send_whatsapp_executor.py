@@ -20,9 +20,48 @@ from uuid import UUID
 from app.integrations import IntegrationFactory
 from app.services.journey_send_idempotency_service import check_and_reserve, compute_dedup_key
 from .base import BaseNodeExecutor, ExecutionResult
-from .utils import build_log_payload
+from .utils import build_log_payload, record_audit_failure
 
 logger = logging.getLogger(__name__)
+
+# JAWIS notification-integration variable contract (lead_new journey): a
+# WhatsApp template with exactly 4 positional variables ({{1}}..{{4}}) is
+# assumed to follow this fixed, JAWIS-given field order. Gated on variable
+# COUNT (not template id/name) so it can never affect any other journey's
+# 1-3-variable template — those keep using the pre-existing name/phone/email
+# fallback below, unchanged. Values always come from the resolved JAWIS lead
+# context (exec_ctx.lead); never fabricated — a missing field fails the node
+# instead of silently sending a guess (see the missing-variable branch below).
+_JAWIS_FOUR_VARIABLE_FIELD_ORDER = ["first_name", "building_name", "city", "agent_name"]
+
+# Per-template JAWIS field order for every other published production
+# journey's WhatsApp template (Follow-Up, Qualified, Tour Scheduled,
+# Proposal Sent, Won, Lost — Negotiation is notification-only, no WhatsApp
+# template). Keyed by the resolved Meta template name (case-insensitive),
+# so — unlike the lead_new heuristic above — templates that happen to share
+# a variable count (e.g. tour_confirm and lead_new are both 4-variable) each
+# get their own explicit, unambiguous mapping instead of being conflated.
+# Same contract as lead_new: values always come from the resolved JAWIS lead
+# context, never fabricated; a missing field fails the node rather than
+# guessing (see the missing-variable branch below).
+_JAWIS_TEMPLATE_VARIABLE_MAP: Dict[str, list] = {
+    # Follow-Up
+    "req_noted": ["first_name", "seats", "building_name"],
+    "nudge_1": ["first_name", "building_name"],
+    # Qualified
+    "options_share": ["seats", "building_name", "options_link"],
+    # Tour Scheduled
+    "tour_confirm": ["building_name", "tour_datetime", "map_link", "agent_name"],
+    "tour_remind_24h": ["tour_datetime", "building_name"],
+    "tour_remind_2h": ["tour_datetime", "building_name"],
+    # Proposal Sent
+    "proposal_wa": ["plan_type", "building_name", "proposal_link", "move_in_date", "price"],
+    # Won
+    "welcome_win": ["plan_type", "building_name", "move_in_date"],
+    # Lost
+    "graceful_close": ["first_name"],
+    "reengage": ["first_name", "building_name"],
+}
 
 
 class SendWhatsAppExecutor(BaseNodeExecutor):
@@ -50,6 +89,7 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
         template_name = node_config.get("template_name", "")
         raw_variables = node_config.get("variables", {})
 
+        template = None
         template_declared_variables = []
         if template_id and template_service:
             template = await template_service.get_template(UUID(template_id))
@@ -60,15 +100,189 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
 
         resolved_variables = renderer.render_all(raw_variables) if renderer else raw_variables
 
+        rendered_body_preview = None
+        jawis_variable_resolution_used = False
+
         # The Journey Builder has no UI yet for mapping a template's
         # positional {{1}}/{{2}} variables to lead fields (node.config never
         # has a "variables" key), so raw_variables is always {} for a
-        # template with declared variables. Falls back to the one mapping
-        # convention every WhatsApp template observed so far uses
-        # ({{1}} = recipient name) rather than sending a template with
-        # unrendered placeholders — only when the node genuinely configured
-        # nothing, so an explicit (even empty) config always wins.
-        if not resolved_variables and template_declared_variables:
+        # template with declared variables — an explicit (even empty) config
+        # always wins over every branch below.
+        mapped_fields = _JAWIS_TEMPLATE_VARIABLE_MAP.get((resolved_template or "").strip().lower())
+
+        if not resolved_variables and mapped_fields and len(template_declared_variables) == len(mapped_fields):
+            # Named-template JAWIS resolution for every production journey
+            # beyond lead_new (Follow-Up/Qualified/Tour Scheduled/Proposal
+            # Sent/Won/Lost) — same contract as the lead_new branch below
+            # (log every {{n}} -> value pair, refuse to send rather than
+            # guess if any is missing), just keyed by the template's own
+            # name instead of a fixed variable count, so e.g. tour_confirm
+            # (4 variables) never collides with lead_new's own 4-variable
+            # mapping just below.
+            jawis_variable_resolution_used = True
+            resolved_lead_for_vars = (getattr(exec_ctx, "lead", None) if exec_ctx else None) or {}
+            jawis_values = [resolved_lead_for_vars.get(field) for field in mapped_fields]
+
+            for position, field_name, value in zip(template_declared_variables, mapped_fields, jawis_values):
+                logger.info(
+                    "SendWhatsAppExecutor: {{%s}} -> %s (JAWIS field=%s) lead=%s node=%s template=%s",
+                    position, value, field_name, lead_id, node_id, resolved_template,
+                )
+
+            missing_variables = [
+                field_name for field_name, value in zip(mapped_fields, jawis_values)
+                if not value
+            ]
+
+            if missing_variables:
+                error_message = (
+                    f"Missing required JAWIS variable(s) for WhatsApp template: {', '.join(missing_variables)}"
+                )
+                logger.error(
+                    "SendWhatsAppExecutor: %s — lead=%s node=%s template=%s — send aborted, "
+                    "never sending with an incomplete/guessed variable",
+                    error_message, lead_id, node_id, resolved_template,
+                )
+                partial_resolved = {
+                    field_name: value
+                    for field_name, value in zip(mapped_fields, jawis_values)
+                    if value
+                }
+                await record_audit_failure(
+                    getattr(exec_ctx, "session", None) if exec_ctx else None,
+                    lead_id=lead_id,
+                    node_id=node_id,
+                    running_instance_id=str(running_instance.id),
+                    journey_id=getattr(running_instance, "journey_id", None),
+                    payload={
+                        "reason": "missing_jawis_variable",
+                        "missing_variables": missing_variables,
+                        "resolved_variables_partial": partial_resolved,
+                        "template_id": template_id,
+                        "template_name": resolved_template,
+                        "timestamp": started_at.isoformat(),
+                    },
+                )
+                output_data = {
+                    "message": error_message,
+                    "resolved_template_name": resolved_template,
+                    "missing_variables": missing_variables,
+                    "resolved_variables_partial": partial_resolved,
+                    "template_id": template_id,
+                    "status": "failed_missing_variable",
+                }
+                output = {
+                    "log_payload": build_log_payload(
+                        flow_definition_id=context.get("flow_definition_id", ""),
+                        running_instance_id=str(running_instance.id),
+                        lead_id=lead_id,
+                        node_id=node_id,
+                        node_type=self.node_type,
+                        status="failed",
+                        input_data={"template_id": template_id, "template_name": template_name},
+                        output_data=output_data,
+                        error_message=error_message,
+                        started_at=started_at,
+                    ),
+                    **output_data,
+                }
+                return ExecutionResult(
+                    success=False,
+                    updated_context=context,
+                    status="failed",
+                    error=error_message,
+                    output=output,
+                )
+
+            resolved_variables = dict(zip(template_declared_variables, jawis_values))
+        elif not resolved_variables and len(template_declared_variables) == 4:
+            # JAWIS notification integration: a 4-variable template is
+            # assumed to be the lead_new-shaped template — resolve strictly
+            # from JAWIS-sourced lead fields, log every {{n}} -> value pair,
+            # and refuse to send (rather than guess) if any is missing.
+            jawis_variable_resolution_used = True
+            resolved_lead_for_vars = (getattr(exec_ctx, "lead", None) if exec_ctx else None) or {}
+            jawis_values = [resolved_lead_for_vars.get(field) for field in _JAWIS_FOUR_VARIABLE_FIELD_ORDER]
+
+            for position, field_name, value in zip(
+                template_declared_variables, _JAWIS_FOUR_VARIABLE_FIELD_ORDER, jawis_values,
+            ):
+                logger.info(
+                    "SendWhatsAppExecutor: {{%s}} -> %s (JAWIS field=%s) lead=%s node=%s",
+                    position, value, field_name, lead_id, node_id,
+                )
+
+            missing_variables = [
+                field_name for field_name, value in zip(_JAWIS_FOUR_VARIABLE_FIELD_ORDER, jawis_values)
+                if not value
+            ]
+
+            if missing_variables:
+                error_message = (
+                    f"Missing required JAWIS variable(s) for WhatsApp template: {', '.join(missing_variables)}"
+                )
+                logger.error(
+                    "SendWhatsAppExecutor: %s — lead=%s node=%s template=%s — send aborted, "
+                    "never sending with an incomplete/guessed variable",
+                    error_message, lead_id, node_id, resolved_template,
+                )
+                partial_resolved = {
+                    field_name: value
+                    for field_name, value in zip(_JAWIS_FOUR_VARIABLE_FIELD_ORDER, jawis_values)
+                    if value
+                }
+                await record_audit_failure(
+                    getattr(exec_ctx, "session", None) if exec_ctx else None,
+                    lead_id=lead_id,
+                    node_id=node_id,
+                    running_instance_id=str(running_instance.id),
+                    journey_id=getattr(running_instance, "journey_id", None),
+                    payload={
+                        "reason": "missing_jawis_variable",
+                        "missing_variables": missing_variables,
+                        "resolved_variables_partial": partial_resolved,
+                        "template_id": template_id,
+                        "template_name": resolved_template,
+                        "timestamp": started_at.isoformat(),
+                    },
+                )
+                output_data = {
+                    "message": error_message,
+                    "resolved_template_name": resolved_template,
+                    "missing_variables": missing_variables,
+                    "resolved_variables_partial": partial_resolved,
+                    "template_id": template_id,
+                    "status": "failed_missing_variable",
+                }
+                output = {
+                    "log_payload": build_log_payload(
+                        flow_definition_id=context.get("flow_definition_id", ""),
+                        running_instance_id=str(running_instance.id),
+                        lead_id=lead_id,
+                        node_id=node_id,
+                        node_type=self.node_type,
+                        status="failed",
+                        input_data={"template_id": template_id, "template_name": template_name},
+                        output_data=output_data,
+                        error_message=error_message,
+                        started_at=started_at,
+                    ),
+                    **output_data,
+                }
+                return ExecutionResult(
+                    success=False,
+                    updated_context=context,
+                    status="failed",
+                    error=error_message,
+                    output=output,
+                )
+
+            resolved_variables = dict(zip(template_declared_variables, jawis_values))
+        elif not resolved_variables and template_declared_variables:
+            # Legacy fallback for any non-4-variable template — unchanged
+            # from before: the one mapping convention every such WhatsApp
+            # template observed so far uses ({{1}} = recipient name) rather
+            # than sending a template with unrendered placeholders.
             resolved_lead_for_vars = getattr(exec_ctx, "lead", None) if exec_ctx else None
             lead_field_defaults = [
                 (resolved_lead_for_vars or {}).get("name"),
@@ -80,6 +294,11 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
                 for var_key, value in zip(template_declared_variables, lead_field_defaults)
                 if value
             }
+
+        if template is not None and template.content:
+            rendered_body_preview = template.content
+            for position, value in resolved_variables.items():
+                rendered_body_preview = rendered_body_preview.replace(f"{{{{{position}}}}}", str(value))
 
         logger.info(
             "SendWhatsAppExecutor: resolved template for lead=%s node=%s "
@@ -193,6 +412,11 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
             # once, here, never re-derived downstream (see
             # CommunicationEventService._publish_to_jawis's "stage" field).
             "stage_at_send": stage_at_send,
+            # Audit-only local preview of the substituted body text (Meta
+            # still performs the real substitution server-side) — Part 4
+            # ("Store ... rendered template ...").
+            "rendered_body_preview": rendered_body_preview,
+            "jawis_variable_resolution_used": jawis_variable_resolution_used,
         }
 
         output = {

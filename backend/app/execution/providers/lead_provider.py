@@ -51,6 +51,22 @@ class DummyLeadProvider(LeadProvider):
                 "email": "john.doe@example.com",
                 "phone": "+1234567890",
                 "stage_key": "qualification",
+                # Additive dummy values for the JAWIS notification variable
+                # set (see SendWhatsAppExecutor) — lets local/manual
+                # verification exercise the full success path without a
+                # live JAWIS connection.
+                "city": "Lucknow",
+                "first_name": "John",
+                "building_name": "Acme Business Tower",
+                "agent_name": "Jane Agent",
+                "seats": "2",
+                "options_link": "https://example.com/options/42",
+                "tour_datetime": "2026-08-01 11:00 AM",
+                "map_link": "https://maps.example.com/acme-tower",
+                "plan_type": "2BHK",
+                "proposal_link": "https://example.com/proposal/42",
+                "price": "1.2Cr",
+                "move_in_date": "2026-09-15",
             },
             "company": {
                 "id": 1,

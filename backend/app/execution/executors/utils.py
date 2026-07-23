@@ -85,3 +85,53 @@ def get_next_node_id(node: Dict[str, Any], context: Dict[str, Any]) -> Optional[
     """
     node_config = node.get("config") or {}
     return node_config.get("next_node_id") or None
+
+
+async def record_audit_failure(
+    session: Any,
+    *,
+    lead_id: int,
+    node_id: str,
+    running_instance_id: str,
+    journey_id: Optional[str],
+    payload: Dict[str, Any],
+) -> None:
+    """Write a FAILED CommunicationEvent for audit purposes, best-effort.
+
+    The engine's own failure-log path (ExecutionEngine._create_failed_log)
+    only persists a plain string ``error_message`` onto FlowExecutionLog, not
+    an executor's structured output — so an executor that needs to record
+    *why* it failed (which variable was missing, the last provider error, a
+    partial payload, a timestamp) writes it here directly instead, reusing
+    CommunicationEvent's existing FAILED type (see that model's docstring:
+    "the outbound send itself failed ... recorded directly by the send
+    endpoint"). This also gets the existing JAWIS sync for free (`"failed"`
+    is already in communication_event_service.py's outbound event-type set).
+
+    Never raises — an audit-write failure must never mask the real failure
+    the caller is already reporting via its ExecutionResult/exception.
+    """
+    if session is None:
+        return
+    try:
+        from app.services.communication_event_service import CommunicationEventService
+        from app.communication_events.schemas import CommunicationEventCreateSchema
+        from app.models.communication_event import CommunicationEventType, CommunicationEventChannel
+
+        await CommunicationEventService(session).create(
+            CommunicationEventCreateSchema(
+                running_instance_id=running_instance_id,
+                journey_id=journey_id,
+                lead_id=lead_id,
+                node_id=node_id,
+                event_type=CommunicationEventType.FAILED.value,
+                channel=CommunicationEventChannel.SYSTEM.value,
+                payload=payload,
+            )
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "record_audit_failure: failed to write audit CommunicationEvent for node=%s instance=%s",
+            node_id, running_instance_id,
+        )

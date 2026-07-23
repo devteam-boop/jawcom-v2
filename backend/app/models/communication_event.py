@@ -34,6 +34,7 @@ class CommunicationEventType(str, enum.Enum):
     NOTE_ADDED = "note_added"
     TASK_CREATED = "task_created"
     TASK_COMPLETED = "task_completed"
+    NOTIFICATION_SENT = "notification_sent"
     # Inbound provider status updates (Meta WhatsApp Cloud API / Resend
     # webhooks). Channel-agnostic by design — the existing `channel` column
     # (whatsapp/email) already distinguishes which provider these came from,

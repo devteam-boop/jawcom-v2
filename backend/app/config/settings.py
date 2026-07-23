@@ -234,6 +234,15 @@ class Settings(BaseSettings):
     JAWIS_EMAIL_PROVIDER: str = Field(
         default="jawis", description="Email integration backend: dummy, jawis, or resend",
     )
+    JAWIS_NOTIFICATION_PROVIDER: str = Field(
+        default="jawis", description="Notification-node integration backend: dummy or jawis",
+    )
+    JAWIS_NOTIFICATION_ENDPOINT: str = Field(
+        default="/api/notifications/send",
+        description="JAWIS Notification API path (relative to JAWIS_BASE_URL), following the same "
+                    "/api/messages/{channel}/send convention as the Sprint-1 messaging endpoints — "
+                    "confirm/adjust against JAWIS's real API contract if it differs",
+    )
 
     # CORS
     CORS_ORIGINS: str = "*"

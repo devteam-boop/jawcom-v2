@@ -39,6 +39,7 @@ class IntegrationConfig:
         self.jawis_workspace: Optional[str] = settings.JAWIS_WORKSPACE
         self.jawis_lead_provider: str = settings.JAWIS_LEAD_PROVIDER
         self.jawis_crm_provider: str = settings.JAWIS_CRM_PROVIDER
+        self.jawis_notification_endpoint: str = settings.JAWIS_NOTIFICATION_ENDPOINT
 
     def to_dict(self) -> dict:
         """Return all fields as a dict (safe for logging — masks secrets)."""
@@ -53,6 +54,7 @@ class IntegrationConfig:
             "jawis_workspace": self.jawis_workspace,
             "jawis_lead_provider": self.jawis_lead_provider,
             "jawis_crm_provider": self.jawis_crm_provider,
+            "jawis_notification_endpoint": self.jawis_notification_endpoint,
             "jawis_api_key": "***" if self.jawis_api_key else None,
             "jawis_api_token": "***" if self.jawis_api_token else None,
         }

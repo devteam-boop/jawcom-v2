@@ -38,7 +38,12 @@ class JawisLeadProvider(LeadProvider):
                 lead_id,
             )
             fallback = {
-                "lead": {"id": lead_id, "name": "Unknown", "email": None, "phone": None},
+                "lead": {
+                    "id": lead_id, "name": "Unknown", "email": None, "phone": None,
+                    "city": None, "first_name": None, "building_name": None, "agent_name": None,
+                    "seats": None, "options_link": None, "tour_datetime": None, "map_link": None,
+                    "plan_type": None, "proposal_link": None, "price": None, "move_in_date": None,
+                },
                 "company": None,
                 "owner": None,
                 "stage": None,
@@ -51,17 +56,37 @@ class JawisLeadProvider(LeadProvider):
         stage = ctx.stage
         owner = ctx.assigned_user
 
-        # lead is a LeadSummarySchema (id/name/email/phone/city/stage) —
-        # company_id/assigned_to/metadata are no longer part of what JAWIS
-        # returns for a lead, so they're not read here; company/owner stay
-        # None (client.get_lead_context() no longer fetches them either —
-        # nothing left to fetch them by).
+        # lead is a LeadSummarySchema (id/name/email/phone/city/first_name/
+        # building_name/agent_name/stage) — company_id/assigned_to/metadata
+        # are no longer part of what JAWIS returns for a lead, so they're not
+        # read here; company/owner stay None (client.get_lead_context() no
+        # longer fetches them either — nothing left to fetch them by).
+        #
+        # city/first_name/building_name/agent_name (plus the later-stage
+        # production journeys' seats/options_link/tour_datetime/map_link/
+        # plan_type/proposal_link/price/move_in_date) are passed through
+        # here (previously `city` was silently dropped despite being on the
+        # schema) so the JAWIS variable resolver (SendWhatsAppExecutor) can
+        # read them off exec_ctx.lead — see docs on LeadSummarySchema for why
+        # a missing one becomes None rather than a guessed value.
         result: Dict[str, Any] = {
             "lead": {
                 "id": lead.id,
                 "name": lead.name,
                 "email": lead.email,
                 "phone": lead.phone,
+                "city": lead.city,
+                "first_name": lead.first_name,
+                "building_name": lead.building_name,
+                "agent_name": lead.agent_name,
+                "seats": lead.seats,
+                "options_link": lead.options_link,
+                "tour_datetime": lead.tour_datetime,
+                "map_link": lead.map_link,
+                "plan_type": lead.plan_type,
+                "proposal_link": lead.proposal_link,
+                "price": lead.price,
+                "move_in_date": lead.move_in_date,
             },
             "company": {
                 "id": company.id,

@@ -69,6 +69,7 @@ _NODE_TYPE_TO_EVENT_TYPE = {
     "send_email": CommunicationEventType.EMAIL_SENT.value,
     "create_note": CommunicationEventType.NOTE_ADDED.value,
     "manual_task": CommunicationEventType.TASK_CREATED.value,
+    "notification": CommunicationEventType.NOTIFICATION_SENT.value,
 }
 
 _NODE_TYPE_TO_CHANNEL = {
