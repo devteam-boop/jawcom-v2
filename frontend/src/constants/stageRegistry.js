@@ -15,8 +15,8 @@
  *
  * Order here is the literal dropdown order — matches the current
  * NextMoveIn/JAWIS pipeline: New -> Follow-Up -> Qualified -> Options
- * Shared -> Site Visit Scheduled -> Site Visit Completed -> Negotiation
- * -> Won -> Lost.
+ * Shared -> Site Visit Scheduled -> Site Visit Completed -> Proposal ->
+ * Negotiation -> Won -> Lost.
  */
 export const STAGES = [
   { value: "new", label: "New" },
@@ -29,7 +29,15 @@ export const STAGES = [
   // until a journey is actually wired to one.
   { value: "options_shared", label: "Options Shared" },
   { value: "site_visit_scheduled", label: "Site Visit Scheduled" },
+  // Kept distinct from "proposal_shared" below — this key is still used
+  // as a condition value inside the Tour Scheduled journey (checking
+  // whether the site visit itself completed), so it must NOT be renamed
+  // or repurposed as the Proposal trigger.
   { value: "site_visit_completed", label: "Site Visit Completed" },
+  // New: JAWIS's own "proposal shared" stage — triggers the Proposal
+  // journey. No existing stage_mapping references this key yet, so
+  // nothing executes for it until a journey is actually wired to it.
+  { value: "proposal_shared", label: "Proposal" },
   { value: "negotiation", label: "Negotiation" },
   { value: "won", label: "Won" },
   { value: "lost", label: "Lost" },
