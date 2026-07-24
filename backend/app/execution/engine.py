@@ -28,7 +28,7 @@ The source of truth for the trigger stage is **stage_mappings**.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -240,7 +240,7 @@ class ExecutionEngine:
 
                     trigger_node = self._find_node_by_id(flow_def.definition, first_node_id)
                     if trigger_node:
-                        continue_traversal = await self._execute_node(
+                        continue_traversal, _ = await self._execute_node(
                             node=trigger_node,
                             instance=instance,
                             flow_def_id=str(flow_def.id),
@@ -294,7 +294,7 @@ class ExecutionEngine:
         instance_service: RunningInstanceService,
         event_service: CommunicationEventService,
         exec_ctx: Optional[ExecutionContext] = None,
-    ) -> bool:
+    ) -> Tuple[bool, Optional[str]]:
         """Execute a single node through its registered executor.
 
         Creates Started → Success|Failed execution logs with duration.
@@ -302,8 +302,12 @@ class ExecutionEngine:
         last_executed_at.
 
         Returns:
-            True if traversal should continue to the next node.
-            False if traversal should stop (failure or end node reached).
+            (should_continue, next_node_id) where:
+            - should_continue: True if traversal should continue to the next
+              node, False if it should stop (failure/pause/end node reached).
+            - next_node_id: the executor's chosen branch target (e.g. a
+              Condition node's true/false route), or None to let the caller
+              fall back to full graph adjacency (every non-branching node).
         """
         node_id = node.get("id", "")
         node_type = node.get("type", "")
@@ -332,7 +336,7 @@ class ExecutionEngine:
                 node_id, node_type, f"Unknown node type: {node_type}", started_at,
             )
             await instance_service.fail(UUID(instance.id))
-            return False
+            return False, None
 
         # ── Dispatch to executor ────────────────────────────────────
         try:
@@ -344,7 +348,7 @@ class ExecutionEngine:
                 node_id, node_type, str(exc), started_at,
             )
             await instance_service.fail(UUID(instance.id))
-            return False
+            return False, None
 
         completed_at = datetime.utcnow()
         duration_ms = int((completed_at - started_at).total_seconds() * 1000)
@@ -462,7 +466,7 @@ class ExecutionEngine:
                     await instance_service.update(
                         UUID(instance.id), RunningInstanceUpdateSchema(data=current_data),
                     )
-                return False
+                return False, None
 
             # Normal success — persist data and continue
             await instance_service.update(
@@ -474,9 +478,9 @@ class ExecutionEngine:
             # End node — mark completed and stop traversal
             if node_type == "end":
                 await instance_service.complete(UUID(instance.id))
-                return False
+                return False, None
 
-            return True
+            return True, result.next_node_id
 
         # Executor reported failure
         await self._create_failed_log(
@@ -484,7 +488,7 @@ class ExecutionEngine:
             node_id, node_type, result.error or "Unknown error", started_at,
         )
         await instance_service.fail(UUID(instance.id))
-        return False
+        return False, None
 
     async def _create_failed_log(
         self,
@@ -650,7 +654,7 @@ class ExecutionEngine:
             if not node:
                 continue
 
-            should_continue = await self._execute_node(
+            should_continue, branch_next_node_id = await self._execute_node(
                 node=node,
                 instance=instance,
                 flow_def_id=flow_def_id,
@@ -665,7 +669,17 @@ class ExecutionEngine:
             if not should_continue:
                 return
 
-            next_nodes = adjacency.get(node_id, [])
+            # A branching node (e.g. Condition) resolves to exactly ONE
+            # explicit next node — it must not also fall through to every
+            # other edge wired from it in the graph (both the true AND false
+            # targets), or a decision like "customer replied -> End" would
+            # still traverse into the "no reply -> Nudge" branch alongside
+            # it. Non-branching nodes leave next_node_id unset and keep
+            # following full adjacency exactly as before.
+            if branch_next_node_id:
+                next_nodes = [branch_next_node_id]
+            else:
+                next_nodes = adjacency.get(node_id, [])
             queue.extend(next_nodes)
 
     # ------------------------------------------------------------------
@@ -841,7 +855,7 @@ class ExecutionEngine:
                     )
                 else:
                     # Retry mode: execute the current node then traverse
-                    continue_traversal = await self._execute_node(
+                    continue_traversal, _ = await self._execute_node(
                         node=start_node,
                         instance=instance,
                         flow_def_id=str(flow_def.id),

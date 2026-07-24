@@ -54,7 +54,7 @@ _JAWIS_FOUR_VARIABLE_FIELD_ORDER = ["first_name", "building_name", "city", "agen
 _JAWIS_TEMPLATE_VARIABLE_MAP: Dict[str, list] = {
     # Follow-Up
     "contacted_req_noted": ["first_name", "seats", "building_name"],
-    "nudge_1": ["first_name", "building_name"],
+    "lead_contacted_nudge_1": ["first_name", "building_name"],
     # Qualified / Options Shared
     "lead_qualified_option_share": ["seats", "building_name", "options_link"],
     # Site Visit Scheduled
