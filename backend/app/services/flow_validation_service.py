@@ -25,11 +25,20 @@ from typing import Any, Dict, List
 # Known-resolvable variable surface for a Condition node's "field" — mirrors
 # exactly what LeadProvider.get_lead_context() returns (JawisLeadProvider,
 # the production provider; DummyLeadProvider is a superset used only for
-# local/offline testing) and what ExecutionContext.to_dict() /
-# VariableResolverService actually expose to condition evaluation. A field
-# outside this set (e.g. "lead.replied") can never resolve to anything but
-# an unresolved/None value, no matter what really happened for the lead —
-# the condition is permanently stuck evaluating against missing data.
+# local/offline testing). The reply/communication facts ExecutionEngine
+# separately merges onto this same lead.* namespace
+# (wait_condition_service.REPLY_FACT_FIELDS) are unioned in inside
+# _is_condition_field_resolvable() below via a LOCAL import, not hardcoded
+# here a second time and not imported at module level — wait_condition_service
+# transitively imports app.execution (engine.py), which imports
+# wait_condition_service back (for get_reply_facts), and app.services.__init__
+# eagerly loads this module via flow_definition_service, so a module-level
+# import here would be circular (same pattern as
+# communication_event_service.py's resolve_whatsapp_reply_anchor). A field
+# outside the combined set (e.g. "lead.replied") can never resolve to
+# anything but an unresolved/None value, no matter what really happened for
+# the lead — the condition is permanently stuck evaluating against missing
+# data.
 _RESOLVABLE_LEAD_FIELDS = frozenset({
     "id", "name", "email", "phone", "city", "first_name", "last_name", "company",
     "building_name", "building_id", "agent_name", "assigned_to", "seats",
@@ -57,19 +66,25 @@ def _is_condition_field_resolvable(field: str) -> bool:
     "node_outputs.<node_id>...." paths reference a prior node's own
     runtime output and can't be verified statically here — never flagged.
     """
+    # Local import to avoid the circular import described above — this is
+    # the ONE place REPLY_FACT_FIELDS is combined with the LeadProvider-
+    # derived fields, so the two can never hardcode-drift apart again.
+    from app.services.wait_condition_service import REPLY_FACT_FIELDS
+    resolvable_lead_fields = _RESOLVABLE_LEAD_FIELDS | REPLY_FACT_FIELDS
+
     if field in _RESOLVABLE_BARE_TOP_LEVEL_PATHS:
         return True
     if field.startswith("node_outputs."):
         return True
     if field.startswith("lead."):
-        return field[len("lead."):] in _RESOLVABLE_LEAD_FIELDS
+        return field[len("lead."):] in resolvable_lead_fields
     if field.startswith("company."):
         return field[len("company."):] in _RESOLVABLE_COMPANY_FIELDS
     if "." not in field:
         # Bare (dot-less) name — VariableResolverService falls back to
         # lead.<name>/company.<name> for these (see
         # VariableResolverService._BARE_NAME_FALLBACK_NAMESPACES).
-        return field in _RESOLVABLE_LEAD_FIELDS or field in _RESOLVABLE_COMPANY_FIELDS
+        return field in resolvable_lead_fields or field in _RESOLVABLE_COMPANY_FIELDS
     return False
 
 
