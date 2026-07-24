@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Dict
 from uuid import UUID
 
+from app.config.settings import get_settings
 from app.integrations import IntegrationFactory
 from app.services.journey_send_idempotency_service import check_and_reserve, compute_dedup_key
 from .base import BaseNodeExecutor, ExecutionResult
@@ -379,6 +380,19 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
                     "raw_variables": raw_variables,
                     "status": "skipped_duplicate",
                     "stage_at_send": stage_at_send,
+                    # Same routing metadata append as the success path below
+                    # — this still becomes a whatsapp_sent CommunicationEvent
+                    # (engine.py records one for any result.success, and a
+                    # suppressed duplicate is success=True), so it needs the
+                    # same "to" for phone-based reply matching to find it.
+                    # No provider_message_id: no Meta call happens on this
+                    # path (suppressed before the integration call).
+                    "to": request_payload.get("recipient_phone"),
+                    "from": get_settings().WHATSAPP_PHONE_NUMBER_ID,
+                    "provider_message_id": None,
+                    "template_name": resolved_template,
+                    "channel": "whatsapp",
+                    "direction": "outbound",
                 }
                 output = {
                     "log_payload": build_log_payload(
@@ -425,6 +439,27 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
             # ("Store ... rendered template ...").
             "rendered_body_preview": rendered_body_preview,
             "jawis_variable_resolution_used": jawis_variable_resolution_used,
+            # Routing metadata — appended (never overwrites any key above).
+            # Manual sends (app/api/message_routes.py) have always stored
+            # "to"/"from" on their CommunicationEvent payload; automation
+            # sends never did, which made every automation-sent
+            # whatsapp_sent row invisible to
+            # CommunicationEventRepository.get_latest_whatsapp_sent_by_phone/
+            # get_whatsapp_sent_candidates_by_phone (both match on
+            # payload->>'to', and SQL "NULL = x" is never true) — a reply
+            # could then only ever be attributed to whichever OTHER lead's
+            # manually-sent row happened to still be findable for that
+            # phone number, even after the number moved to a different
+            # lead entirely. "to" is the destination phone actually used
+            # for this Meta send (same value as request_payload's
+            # recipient_phone, not re-derived); "from" mirrors the same
+            # settings.WHATSAPP_PHONE_NUMBER_ID manual sends use.
+            "to": request_payload.get("recipient_phone"),
+            "from": get_settings().WHATSAPP_PHONE_NUMBER_ID,
+            "provider_message_id": integration_response.get("provider_message_id"),
+            "template_name": resolved_template,
+            "channel": "whatsapp",
+            "direction": "outbound",
         }
 
         output = {
