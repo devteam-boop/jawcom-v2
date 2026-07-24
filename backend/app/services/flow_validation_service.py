@@ -15,10 +15,62 @@ Validation covers two categories:
    - Send WhatsApp: template_id or template_name required
    - Send Email: subject required; template_id or template_name required
    - Notification: title and message required
-   - Condition: field, operator and value required
+   - Condition: field, operator, value, true_next_node_id and
+     false_next_node_id required; field must reference a variable the
+     execution engine's lead/company context can actually resolve
 """
 
 from typing import Any, Dict, List
+
+# Known-resolvable variable surface for a Condition node's "field" — mirrors
+# exactly what LeadProvider.get_lead_context() returns (JawisLeadProvider,
+# the production provider; DummyLeadProvider is a superset used only for
+# local/offline testing) and what ExecutionContext.to_dict() /
+# VariableResolverService actually expose to condition evaluation. A field
+# outside this set (e.g. "lead.replied") can never resolve to anything but
+# an unresolved/None value, no matter what really happened for the lead —
+# the condition is permanently stuck evaluating against missing data.
+_RESOLVABLE_LEAD_FIELDS = frozenset({
+    "id", "name", "email", "phone", "city", "first_name", "last_name", "company",
+    "building_name", "building_id", "agent_name", "assigned_to", "seats",
+    "options_link", "tour_datetime", "map_link", "plan_type", "proposal_link",
+    "price", "move_in_date",
+})
+_RESOLVABLE_COMPANY_FIELDS = frozenset({
+    "id", "name", "industry", "size", "website", "custom_fields",
+})
+_RESOLVABLE_BARE_TOP_LEVEL_PATHS = frozenset({
+    "today", "now", "journey.name", "execution.id", "execution.flow_definition_id",
+})
+
+
+def _is_condition_field_resolvable(field: str) -> bool:
+    """True if *field* is a dotted path the execution engine's variable
+    resolver can actually produce a value for.
+
+    Reply state (e.g. a customer having replied) lives ONLY in
+    communication_events, read only by wait_condition_service.py's Wait
+    "replied" branch — never by a Condition node, which only ever sees
+    lead/company/journey/execution/today/now — so "lead.replied" (or any
+    similar made-up field) always fails this check.
+
+    "node_outputs.<node_id>...." paths reference a prior node's own
+    runtime output and can't be verified statically here — never flagged.
+    """
+    if field in _RESOLVABLE_BARE_TOP_LEVEL_PATHS:
+        return True
+    if field.startswith("node_outputs."):
+        return True
+    if field.startswith("lead."):
+        return field[len("lead."):] in _RESOLVABLE_LEAD_FIELDS
+    if field.startswith("company."):
+        return field[len("company."):] in _RESOLVABLE_COMPANY_FIELDS
+    if "." not in field:
+        # Bare (dot-less) name — VariableResolverService falls back to
+        # lead.<name>/company.<name> for these (see
+        # VariableResolverService._BARE_NAME_FALLBACK_NAMESPACES).
+        return field in _RESOLVABLE_LEAD_FIELDS or field in _RESOLVABLE_COMPANY_FIELDS
+    return False
 
 
 class FlowValidationService:
@@ -386,6 +438,15 @@ class FlowValidationService:
                         f"Condition '{lbl}' requires a field",
                         node_id=nid,
                     ))
+                elif not _is_condition_field_resolvable(config["field"]):
+                    errors.append(_node_error(
+                        f"Condition '{lbl}' references '{config['field']}', which the "
+                        f"execution engine's lead/company context never exposes (see "
+                        f"LeadProvider.get_lead_context) — this condition can never "
+                        f"evaluate against real data, regardless of what actually "
+                        f"happened for the lead",
+                        node_id=nid,
+                    ))
                 if not config.get("operator"):
                     errors.append(_node_error(
                         f"Condition '{lbl}' requires an operator",
@@ -394,6 +455,26 @@ class FlowValidationService:
                 if not config.get("value"):
                     errors.append(_node_error(
                         f"Condition '{lbl}' requires a value",
+                        node_id=nid,
+                    ))
+                # Branch targets come only from FlowBuilder.jsx's save-time
+                # derivation (deriveConditionBranchConfig, keyed off the
+                # canvas edges' "yes"/"no" source handles) — never from a
+                # Properties Panel field. Without both, ExecutionEngine
+                # falls back to full graph adjacency and runs every
+                # outgoing edge regardless of the condition's result.
+                if not config.get("true_next_node_id"):
+                    errors.append(_node_error(
+                        f"Condition '{lbl}' has no true_next_node_id — connect its "
+                        f"'yes' handle to a node before saving, or the engine will run "
+                        f"every outgoing edge instead of only the TRUE branch",
+                        node_id=nid,
+                    ))
+                if not config.get("false_next_node_id"):
+                    errors.append(_node_error(
+                        f"Condition '{lbl}' has no false_next_node_id — connect its "
+                        f"'no' handle to a node before saving, or the engine will run "
+                        f"every outgoing edge instead of only the FALSE branch",
                         node_id=nid,
                     ))
 

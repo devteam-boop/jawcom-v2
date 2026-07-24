@@ -95,14 +95,34 @@ function toRfEdges(apiEdges) {
     .filter(Boolean);
 }
 
-function toApiNodes(rfNodes) {
+// Condition nodes express their two branches only via which handle an
+// edge is drawn from on the canvas (ConditionNode.jsx's "yes"/"no" source
+// handles) — there is no Properties Panel field for it. ConditionExecutor
+// (backend, unchanged) reads the branch target from
+// config.true_next_node_id/false_next_node_id, not from an edge's handle,
+// so those two keys must be derived from the current edges at save time —
+// previously never written at all, which left both keys permanently
+// absent and made ExecutionEngine._traverse_flow fall back to full graph
+// adjacency (running every outgoing edge) for every Condition node.
+function deriveConditionBranchConfig(node, rfEdges) {
+  if (node.type !== "condition") return node.data.config || {};
+  const config = { ...(node.data.config || {}) };
+  const outgoing = (rfEdges || []).filter((e) => e.source === node.id);
+  const yesEdge = outgoing.find((e) => e.sourceHandle === "yes");
+  const noEdge = outgoing.find((e) => e.sourceHandle === "no");
+  if (yesEdge) config.true_next_node_id = yesEdge.target;
+  if (noEdge) config.false_next_node_id = noEdge.target;
+  return config;
+}
+
+function toApiNodes(rfNodes, rfEdges) {
   return (rfNodes || []).map((n) => ({
     id: n.id,
     type: n.type,
     label: n.data.label,
     x: n.position.x,
     y: n.position.y,
-    config: n.data.config || {},
+    config: deriveConditionBranchConfig(n, rfEdges),
   }));
 }
 
@@ -219,7 +239,7 @@ export default function FlowBuilder({ journeyId, journeyName }) {
 
   const buildDefinition = useCallback(() => {
     return {
-      nodes: toApiNodes(nodes),
+      nodes: toApiNodes(nodes, edges),
       edges: toApiEdges(edges),
     };
   }, [nodes, edges]);
