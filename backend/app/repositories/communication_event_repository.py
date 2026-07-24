@@ -105,6 +105,41 @@ class CommunicationEventRepository(BaseRepository[CommunicationEvent]):
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_whatsapp_sent_candidates_by_phone(
+        self, phone: str, limit: int = 5,
+    ) -> List[CommunicationEvent]:
+        """Up to *limit* leads that have ever been sent a WhatsApp to this
+        phone number, one row per distinct lead_id (each lead's own most
+        recent send to this number), most-recently-active lead first.
+
+        Used to determine the CURRENT owner of a phone number when a
+        number has been reassigned between leads (Production Issue: Lead A
+        -> Lead B) — get_latest_whatsapp_sent_by_phone below returns a
+        single row with no regard for which lead it belongs to, which is
+        exactly what let a reply keep attaching to a lead the number was
+        reassigned AWAY from. The caller
+        (CommunicationEventService.resolve_whatsapp_reply_anchor) verifies
+        each candidate's CURRENT phone against JAWIS, newest lead first,
+        and takes the first one that still actually owns this number.
+
+        Same digit-only phone normalization as get_latest_whatsapp_sent_by_phone.
+        """
+        query = (
+            select(CommunicationEvent)
+            .distinct(CommunicationEvent.lead_id)
+            .where(
+                CommunicationEvent.channel == CommunicationEventChannel.WHATSAPP.value,
+                CommunicationEvent.event_type == "whatsapp_sent",
+                text("regexp_replace(payload->>'to', '\\D', '', 'g') = regexp_replace(:phone, '\\D', '', 'g')"),
+            )
+            .params(phone=phone)
+            .order_by(CommunicationEvent.lead_id, CommunicationEvent.occurred_at.desc())
+        )
+        result = await self.session.execute(query)
+        rows = list(result.scalars().all())
+        rows.sort(key=lambda r: r.occurred_at, reverse=True)
+        return rows[:limit]
+
     async def get_latest_by_lead_and_event_type(
         self, lead_id: int, event_type: str, channel: Optional[str] = None,
     ) -> Optional[CommunicationEvent]:

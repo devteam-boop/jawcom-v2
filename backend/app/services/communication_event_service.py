@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 from uuid import UUID, uuid4
@@ -59,6 +60,22 @@ _REPLY_PHONE_MATCH_WINDOW_HOURS = 72
 # (frontend/src/modules/inbox/whatsappWindow.js) — kept in sync manually
 # since both derive from the same rule, not from a shared constant module.
 WHATSAPP_SESSION_WINDOW_HOURS = 24
+
+# Max distinct leads checked, most-recently-active first, when verifying
+# CURRENT phone ownership (resolve_whatsapp_reply_anchor's "current_owner"
+# tier) — a phone number changing hands more than this many times with no
+# intervening reply is not realistic; bounds the number of JAWIS lookups a
+# single inbound webhook can trigger.
+_PHONE_OWNER_CANDIDATE_LIMIT = 5
+
+
+def _normalize_phone(phone: Optional[str]) -> str:
+    """Digits-only normalization — same rule the SQL-side regexp_replace
+    phone matches use (get_latest_whatsapp_sent_by_phone /
+    get_whatsapp_sent_candidates_by_phone), applied here in Python so a
+    candidate's CURRENT phone (from JAWIS) can be compared against Meta's
+    inbound `from` value the same way."""
+    return re.sub(r"\D", "", phone or "")
 
 
 async def _publish_to_jawis(schema: CommunicationEventSchema) -> bool:
@@ -267,19 +284,30 @@ class CommunicationEventService:
           1. context.id, if present — the primary path (Meta explicitly
              told us which outbound message this replies to). If Meta gave
              us a context.id that doesn't match anything we actually sent,
-             falls through to the phone strategies below rather than
-             giving up.
-          2. The most recent whatsapp_sent to this phone number within the
-             last _REPLY_PHONE_MATCH_WINDOW_HOURS — a fresh message from a
-             known number is still a genuine reply in an ongoing
-             conversation.
-          3. The most recent whatsapp_sent to this phone number ever
-             (unbounded) — lower confidence (stale conversation), but still
-             a resolvable lead, so still surfaced rather than parked.
+             falls through to the strategies below rather than giving up.
+          2. The CURRENT lead who owns this phone number — verified live
+             against JAWIS (LeadProvider.get_lead_context), not merely
+             inferred from send history. Among every lead ever sent a
+             WhatsApp to this number (most-recently-active first, via
+             get_whatsapp_sent_candidates_by_phone), the first one whose
+             phone still actually matches `from_phone` right now wins. This
+             is what a plain "most recent send" lookup cannot guarantee:
+             once a number is reassigned (Lead A -> Lead B), Lead A's old
+             sends must stop being trusted even if one of them happens to
+             be the most recent row for that digit string — only a lead
+             CURRENTLY holding the number is eligible here.
+          3. Only if no candidate lead currently owns this phone (every
+             candidate has since moved on, or truly none exist), fall back
+             to the plain send-recency anchor as before: the most recent
+             whatsapp_sent to this number within the last
+             _REPLY_PHONE_MATCH_WINDOW_HOURS, then unbounded — lower
+             confidence (stale/unverifiable conversation), but still a
+             resolvable lead rather than a parked message.
 
         Returns (provider_message_id_or_None, strategy), where strategy is
-        one of "context_id", "phone_recent", "phone_any", "unmatched" — the
-        caller logs this so which path fired is always debuggable.
+        one of "context_id", "current_owner", "phone_recent", "phone_any",
+        "unmatched" — the caller logs this so which path fired is always
+        debuggable.
         """
         if context_id:
             anchor = await self.repo.get_earliest_by_provider_message_id(context_id)
@@ -288,6 +316,22 @@ class CommunicationEventService:
 
         if not from_phone:
             return None, "unmatched"
+
+        normalized_from_phone = _normalize_phone(from_phone)
+        candidates = await self.repo.get_whatsapp_sent_candidates_by_phone(
+            from_phone, limit=_PHONE_OWNER_CANDIDATE_LIMIT,
+        )
+        if candidates:
+            # Local import — app.execution imports CommunicationEventService
+            # (engine.py), so a module-level import here would be circular.
+            from app.execution.providers import LeadProviderFactory
+
+            lead_provider = LeadProviderFactory.get_provider()
+            for candidate in candidates:
+                current_context = await lead_provider.get_lead_context(candidate.lead_id)
+                current_phone = (current_context.get("lead") or {}).get("phone")
+                if current_phone and _normalize_phone(current_phone) == normalized_from_phone:
+                    return candidate.provider_message_id, "current_owner"
 
         recent_cutoff = datetime.utcnow() - timedelta(hours=_REPLY_PHONE_MATCH_WINDOW_HOURS)
         anchor = await self.repo.get_latest_whatsapp_sent_by_phone(from_phone, since=recent_cutoff)
