@@ -38,17 +38,23 @@ class LeadSummarySchema(BaseModel):
     which required stage_key/created_at/updated_at, is unusable here since
     JAWIS no longer sends those).
 
-    ``first_name``/``last_name``/``company``/``building_name``/``agent_name``
-    (and, for the later-stage production journeys' WhatsApp/email templates,
-    ``seats``/``options_link``/``plan_type``/``price``/``tour_datetime``/
-    ``map_link``/``proposal_link``/``move_in_date``) are additive, optional
-    fields for the JAWIS variable resolver (see ``SendWhatsAppExecutor``) —
-    declared here so they pass through if JAWIS's lead payload includes them;
-    if JAWIS omits one, it resolves to None rather than being fabricated from
-    ``name``/elsewhere. JAWIS may nest these under the lead's own
-    ``custom_fields``/``metadata`` object rather than at the top level of the
-    lead payload — see ``JawisClient.get_lead()``, which merges both shapes
-    before this schema is constructed so either wire format populates them.
+    ``first_name``/``last_name``/``company``/``building_name``/``building_id``/
+    ``agent_name``/``assigned_to`` (and, for the later-stage production
+    journeys' WhatsApp/email templates, ``seats``/``options_link``/
+    ``plan_type``/``price``/``tour_datetime``/``map_link``/``proposal_link``/
+    ``move_in_date``) are additive, optional fields for the JAWIS variable
+    resolver (see ``SendWhatsAppExecutor``) — declared here so they pass
+    through if JAWIS's lead payload includes them; if JAWIS omits one, it
+    resolves to None rather than being fabricated from ``name``/elsewhere.
+    JAWIS may nest these under the lead's own ``custom_fields``/``metadata``
+    object rather than at the top level of the lead payload — see
+    ``JawisClient.get_lead()``, which merges both shapes before this schema
+    is constructed so either wire format populates them.
+
+    ``building_id``/``assigned_to`` are part of the standardized JawCom
+    variable contract (18 fields — see ``docs/architecture.md``); JAWIS is
+    assumed to expose both on the lead payload the same way it does every
+    other field on this schema.
     """
 
     id: str = Field(..., description="Lead ID from JAWIS")
@@ -60,7 +66,9 @@ class LeadSummarySchema(BaseModel):
     last_name: Optional[str] = Field(None, description="Lead last name (JAWIS-provided, never derived from `name`)")
     company: Optional[str] = Field(None, description="Lead's company/organization name")
     building_name: Optional[str] = Field(None, description="Building/property name associated with the lead")
+    building_id: Optional[str] = Field(None, description="Building/property ID associated with the lead")
     agent_name: Optional[str] = Field(None, description="Name of the agent assigned to the lead")
+    assigned_to: Optional[str] = Field(None, description="Name/identifier of the user the lead is assigned to")
     seats: Optional[str] = Field(None, description="Seat/unit count of interest (Follow-Up/Qualified stage templates)")
     options_link: Optional[str] = Field(None, description="Link to shared unit/plan options (Qualified stage)")
     tour_datetime: Optional[str] = Field(None, description="Scheduled tour date/time (Tour Scheduled stage)")

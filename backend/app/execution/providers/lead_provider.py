@@ -59,11 +59,17 @@ class DummyLeadProvider(LeadProvider):
                 # Additive dummy values for the JAWIS notification variable
                 # set (see SendWhatsAppExecutor) — lets local/manual
                 # verification exercise the full success path without a
-                # live JAWIS connection.
+                # live JAWIS connection. Mirrors the full standardized
+                # 18-field variable contract for parity with
+                # JawisLeadProvider (see that class for the live equivalent).
                 "city": "Lucknow",
                 "first_name": "John",
+                "last_name": "Doe",
+                "company": "Acme Corp",
                 "building_name": "Acme Business Tower",
+                "building_id": "BLD-1042",
                 "agent_name": "Jane Agent",
+                "assigned_to": "Jane Agent",
                 "seats": "2",
                 "options_link": "https://example.com/options/42",
                 "tour_datetime": "2026-08-01 11:00 AM",

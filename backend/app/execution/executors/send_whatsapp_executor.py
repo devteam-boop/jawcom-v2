@@ -39,36 +39,36 @@ _JAWIS_FOUR_VARIABLE_FIELD_ORDER = ["first_name", "building_name", "city", "agen
 # Proposal Sent, Won, Lost — Negotiation is notification-only, no WhatsApp
 # template). Keyed by the resolved Meta template name (case-insensitive),
 # so — unlike the lead_new heuristic above — templates that happen to share
-# a variable count (e.g. tour_confirm and lead_new are both 4-variable) each
-# get their own explicit, unambiguous mapping instead of being conflated.
-# Same contract as lead_new: values always come from the resolved JAWIS lead
-# context, never fabricated; a missing field fails the node rather than
-# guessing (see the missing-variable branch below).
+# a variable count (e.g. scheduled_tour_confirm and lead_new are both
+# 4-variable) each get their own explicit, unambiguous mapping instead of
+# being conflated. Same contract as lead_new: values always come from the
+# resolved JAWIS lead context, never fabricated; a missing field fails the
+# node rather than guessing (see the missing-variable branch below).
+#
+# Keys are the exact `whatsapp_templates.template_name` values as synced
+# from Meta (verified against the live templates referenced by each
+# journey's flow) — every key below was previously a near-miss (e.g.
+# "tour_confirm" vs the real "scheduled_tour_confirm") that never matched,
+# which silently fell through to the wrong fallback heuristic below instead
+# of resolving semantically.
 _JAWIS_TEMPLATE_VARIABLE_MAP: Dict[str, list] = {
     # Follow-Up
-    # Production template name is "contacted_req_noted" (not "req_noted" —
-    # that key never matched, which was the root cause of this template
-    # silently falling through to the legacy name/phone/email fallback
-    # below instead of resolving semantically).
     "contacted_req_noted": ["first_name", "seats", "building_name"],
     "nudge_1": ["first_name", "building_name"],
-    # Qualified
-    # Production template name is "lead_qualified_option_share" (not
-    # "options_share" — that key never matched, which was the root cause of
-    # this template silently falling through to the legacy name/phone/email
-    # fallback below instead of resolving semantically).
+    # Qualified / Options Shared
     "lead_qualified_option_share": ["seats", "building_name", "options_link"],
-    # Tour Scheduled
-    "tour_confirm": ["building_name", "tour_datetime", "map_link", "agent_name"],
-    "tour_remind_24h": ["tour_datetime", "building_name"],
-    "tour_remind_2h": ["tour_datetime", "building_name"],
-    # Proposal Sent
-    "proposal_wa": ["plan_type", "building_name", "proposal_link", "move_in_date", "price"],
+    # Site Visit Scheduled
+    "scheduled_tour_confirm": ["building_name", "tour_datetime", "map_link", "agent_name"],
+    "scheduled_remind24h": ["tour_datetime", "building_name"],
+    "scheduled_remind_2h": ["tour_datetime", "building_name"],
+    # Proposal Shared
+    "lead_proposal_wa": ["plan_type", "building_name", "proposal_link", "move_in_date", "price"],
+    "lead_proposal_followup": ["first_name", "building_name"],
     # Won
-    "welcome_win": ["plan_type", "building_name", "move_in_date"],
+    "lead_won": ["plan_type", "building_name", "move_in_date"],
     # Lost
-    "graceful_close": ["first_name"],
-    "reengage": ["first_name", "building_name"],
+    "lead_lost_graceful_close": ["first_name"],
+    "lead_lost_reengage": ["first_name", "building_name"],
 }
 
 

@@ -57,6 +57,29 @@ const VARIABLE_PREVIEWS = {
   "today": "2026-07-06",
   "now": "2026-07-06T12:00:00",
   "execution.id": "abc-123-def-456",
+  // Standardized 18-field variable contract — bare names (as used directly
+  // in template bodies, e.g. {{building_name}}), matching the sample values
+  // DummyLeadProvider returns at execution time (see
+  // backend/app/execution/providers/lead_provider.py) so this preview
+  // reflects what actually resolves at send time, not a placeholder.
+  first_name: "John",
+  last_name: "Doe",
+  company: "Acme Corp",
+  city: "Lucknow",
+  seats: "2",
+  plan_type: "2BHK",
+  building_name: "Acme Business Tower",
+  building_id: "BLD-1042",
+  price: "1.2Cr",
+  move_in_date: "2026-09-15",
+  tour_datetime: "2026-08-01 11:00 AM",
+  agent_name: "Jane Agent",
+  options_link: "https://example.com/options/42",
+  proposal_link: "https://example.com/proposal/42",
+  map_link: "https://maps.example.com/acme-tower",
+  email: "john.doe@example.com",
+  phone: "+1234567890",
+  assigned_to: "Jane Agent",
 };
 
 function previewTemplate(template) {

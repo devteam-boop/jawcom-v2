@@ -80,6 +80,17 @@ class VariableResolverService:
         direct top-level lookup for a single-segment path found nothing;
         every existing dotted path (``{{lead.first_name}}``,
         ``{{company.name}}``, ``{{today}}``, ...) resolves exactly as before.
+
+        A bare name that happens to collide with a reserved top-level
+        namespace key itself (``{{company}}``, ``{{lead}}``) is also routed
+        through this fallback rather than returned as the raw namespace
+        dict: a template author writing ``{{company}}`` means the flat
+        ``lead.company``/``company.company`` scalar field (the same as every
+        other bare-name variable in the standard contract), never the
+        internal context object. If no nested namespace has a same-named
+        scalar field either, the original (dict) value is returned
+        unchanged — existing behavior for any bare name with no scalar
+        equivalent is preserved.
         """
         parts = path.split(".")
         current: Any = self._context
@@ -100,7 +111,17 @@ class VariableResolverService:
             if current is None:
                 break
 
-        if current is None and len(parts) == 1 and isinstance(self._context, dict):
+        direct_hit_is_reserved_namespace = (
+            len(parts) == 1
+            and path in self._BARE_NAME_FALLBACK_NAMESPACES
+            and isinstance(current, dict)
+        )
+
+        if (
+            (current is None or direct_hit_is_reserved_namespace)
+            and len(parts) == 1
+            and isinstance(self._context, dict)
+        ):
             for namespace in self._BARE_NAME_FALLBACK_NAMESPACES:
                 namespace_value = self._context.get(namespace)
                 if isinstance(namespace_value, dict):
