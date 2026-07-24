@@ -9,6 +9,12 @@ Configuration (node.config):
     template_name (str): Free-text template name — legacy fallback, used
         only when ``template_id`` is absent.
     variables (dict): Variable mappings for the template.
+    allow_legacy_name_phone_email_fallback (bool, optional): opt-in only —
+        when the template has variables and no complete map is otherwise
+        resolved, fills {{1}}=name, {{2}}=phone, {{3}}=email. Unset (the
+        default for every existing node) means an incomplete/missing
+        variable map now FAILS the node instead of guessing — see the
+        fail-safe check in execute() below.
 """
 
 import asyncio
@@ -57,6 +63,7 @@ _JAWIS_TEMPLATE_VARIABLE_MAP: Dict[str, list] = {
     "contacted_req_noted": ["first_name", "seats", "building_name"],
     "lead_contacted_nudge_1": ["first_name", "building_name"],
     # Qualified / Options Shared
+    "qualified_ack": ["first_name", "seats", "city"],
     "lead_qualified_option_share": ["seats", "building_name", "options_link"],
     # Site Visit Scheduled
     "scheduled_tour_confirm": ["building_name", "tour_datetime", "map_link", "agent_name"],
@@ -287,11 +294,21 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
                 )
 
             resolved_variables = dict(zip(template_declared_variables, jawis_values))
-        elif not resolved_variables and template_declared_variables:
-            # Legacy fallback for any non-4-variable template — unchanged
-            # from before: the one mapping convention every such WhatsApp
-            # template observed so far uses ({{1}} = recipient name) rather
-            # than sending a template with unrendered placeholders.
+        elif (
+            not resolved_variables
+            and template_declared_variables
+            and node_config.get("allow_legacy_name_phone_email_fallback")
+        ):
+            # Explicit opt-in ONLY (see module docstring) — every existing
+            # journey has this config key unset, so this branch is dead for
+            # all of them by default now. Real incident this guards against:
+            # a template with no variable map got its {{1}}/{{2}}/{{3}}
+            # silently filled with name/phone/email regardless of what
+            # those placeholders actually meant (e.g. {{2}}=seats,
+            # {{3}}=city) — sending the lead's own phone/email back at them
+            # as nonsense. The completeness check right after this
+            # if/elif chain now fails the node instead, for any node that
+            # doesn't explicitly ask for this specific legacy convention.
             resolved_lead_for_vars = getattr(exec_ctx, "lead", None) if exec_ctx else None
             lead_field_defaults = [
                 (resolved_lead_for_vars or {}).get("name"),
@@ -303,6 +320,74 @@ class SendWhatsAppExecutor(BaseNodeExecutor):
                 for var_key, value in zip(template_declared_variables, lead_field_defaults)
                 if value
             }
+
+        # Fail-safe — never guess a customer-facing send. Every declared
+        # template placeholder must have a resolved, non-empty value by this
+        # point (from an explicit node_config.variables map, one of the
+        # JAWIS heuristics above, or the opt-in legacy fallback just above).
+        # Catches both "no map configured at all" and "map configured but
+        # missing entries for some placeholders" — same fail-safe principle
+        # as ConditionExecutor: refuse and halt rather than send with an
+        # incomplete/guessed variable.
+        if template_declared_variables:
+            missing_positions = [v for v in template_declared_variables if not resolved_variables.get(v)]
+            if missing_positions:
+                placeholders = ", ".join(f"{{{{{v}}}}}" for v in template_declared_variables)
+                missing_placeholders = ", ".join(f"{{{{{v}}}}}" for v in missing_positions)
+                error_message = (
+                    f"Template '{resolved_template}' expects {placeholders} but node '{node_id}' "
+                    f"has no complete variable mapping (missing {missing_placeholders}) — "
+                    f"refusing to guess and send"
+                )
+                logger.error(
+                    "SendWhatsAppExecutor: %s — lead=%s node=%s template=%s — send aborted",
+                    error_message, lead_id, node_id, resolved_template,
+                )
+                await record_audit_failure(
+                    getattr(exec_ctx, "session", None) if exec_ctx else None,
+                    lead_id=lead_id,
+                    node_id=node_id,
+                    running_instance_id=str(running_instance.id),
+                    journey_id=getattr(running_instance, "journey_id", None),
+                    payload={
+                        "reason": "incomplete_variable_map",
+                        "missing_placeholders": missing_positions,
+                        "resolved_variables_partial": dict(resolved_variables),
+                        "template_id": template_id,
+                        "template_name": resolved_template,
+                        "timestamp": started_at.isoformat(),
+                    },
+                )
+                output_data = {
+                    "message": error_message,
+                    "resolved_template_name": resolved_template,
+                    "missing_placeholders": missing_positions,
+                    "resolved_variables_partial": dict(resolved_variables),
+                    "template_id": template_id,
+                    "status": "failed_incomplete_variable_map",
+                }
+                output = {
+                    "log_payload": build_log_payload(
+                        flow_definition_id=context.get("flow_definition_id", ""),
+                        running_instance_id=str(running_instance.id),
+                        lead_id=lead_id,
+                        node_id=node_id,
+                        node_type=self.node_type,
+                        status="failed",
+                        input_data={"template_id": template_id, "template_name": template_name},
+                        output_data=output_data,
+                        error_message=error_message,
+                        started_at=started_at,
+                    ),
+                    **output_data,
+                }
+                return ExecutionResult(
+                    success=False,
+                    updated_context=context,
+                    status="failed",
+                    error=error_message,
+                    output=output,
+                )
 
         if template is not None and template.content:
             rendered_body_preview = template.content

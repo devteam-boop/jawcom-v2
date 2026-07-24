@@ -21,6 +21,7 @@ Validation covers two categories:
 """
 
 from typing import Any, Dict, List
+from uuid import UUID
 
 # Known-resolvable variable surface for a Condition node's "field" — mirrors
 # exactly what LeadProvider.get_lead_context() returns (JawisLeadProvider,
@@ -88,10 +89,58 @@ def _is_condition_field_resolvable(field: str) -> bool:
     return False
 
 
+def _missing_whatsapp_template_placeholders(template: Any, config: Dict[str, Any]) -> List[str]:
+    """Which of *template*'s declared {{1}}/{{2}}/... placeholders would
+    NOT resolve to anything at send time, given this node's config.
+
+    Mirrors (via local import, not a duplicated copy)
+    send_whatsapp_executor.py's own resolution priority — explicit
+    node_config.variables map, the opt-in legacy fallback, the named-
+    template JAWIS map, the 4-variable lead_new heuristic — WITHOUT
+    duplicating its comparison/rendering logic: this only checks whether
+    ANY resolution path is configured at all, since whether a specific
+    lead field is actually populated is a runtime concern the executor
+    already fails loudly on (see its own fail-safe checks), not something
+    knowable at validate/publish time.
+
+    Only ``send_whatsapp`` nodes are checked (see the call site) —
+    send_email_executor.py has no equivalent positional variable/template
+    contract at all: it renders {{lead.x}}-style placeholders directly via
+    the same renderer as free-text fields, and the generic Template model
+    email templates use has no declared-variables list in the first place.
+    """
+    from app.execution.executors.send_whatsapp_executor import (
+        _JAWIS_FOUR_VARIABLE_FIELD_ORDER,
+        _JAWIS_TEMPLATE_VARIABLE_MAP,
+    )
+
+    declared = template.variables or []
+    if not declared:
+        return []
+
+    explicit = config.get("variables") or {}
+    if explicit:
+        return [v for v in declared if not explicit.get(v)]
+
+    if config.get("allow_legacy_name_phone_email_fallback"):
+        return []
+
+    mapped_fields = _JAWIS_TEMPLATE_VARIABLE_MAP.get((template.name or "").strip().lower())
+    if mapped_fields and len(declared) == len(mapped_fields):
+        return []
+
+    if len(declared) == len(_JAWIS_FOUR_VARIABLE_FIELD_ORDER):
+        return []
+
+    # No config.variables, no opt-in, no matching JAWIS map, wrong variable
+    # count for the 4-variable heuristic — nothing resolves any placeholder.
+    return list(declared)
+
+
 class FlowValidationService:
 
     @staticmethod
-    def validate(definition: Dict[str, Any]) -> Dict[str, Any]:
+    async def validate(definition: Dict[str, Any], template_service: Any = None) -> Dict[str, Any]:
         nodes = definition.get("nodes") or []
         edges = definition.get("edges") or []
 
@@ -343,6 +392,29 @@ class FlowValidationService:
                         f"Send WhatsApp '{lbl}' requires a template (select one from the dropdown)",
                         node_id=nid,
                     ))
+                elif template_service is not None and config.get("template_id"):
+                    # Real incident this guards against: a template with no
+                    # variable map got its {{1}}/{{2}}/{{3}} silently filled
+                    # with name/phone/email regardless of what those
+                    # placeholders actually meant — sending the lead's own
+                    # phone/email back at them as nonsense. Catches it here,
+                    # at publish time, instead of in a customer's chat (see
+                    # send_whatsapp_executor.py's matching runtime fail-safe).
+                    try:
+                        template = await template_service.get_template(UUID(config["template_id"]))
+                    except Exception:
+                        template = None
+                    if template is not None:
+                        missing = _missing_whatsapp_template_placeholders(template, config)
+                        if missing:
+                            placeholders = ", ".join(f"{{{{{v}}}}}" for v in (template.variables or []))
+                            missing_str = ", ".join(f"{{{{{v}}}}}" for v in missing)
+                            errors.append(_node_error(
+                                f"Send WhatsApp '{lbl}' references template '{template.name}', which "
+                                f"expects {placeholders} but has no complete variable mapping "
+                                f"(missing {missing_str})",
+                                node_id=nid,
+                            ))
 
             elif ntype == "send_email":
                 if not config.get("subject"):

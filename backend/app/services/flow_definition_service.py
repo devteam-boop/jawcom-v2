@@ -12,6 +12,7 @@ from app.flow_definitions.schemas import (
     ValidationResult,
 )
 from app.services.flow_validation_service import FlowValidationService
+from app.templates.services import TemplateService
 
 
 class FlowDefinitionService:
@@ -64,14 +65,18 @@ class FlowDefinitionService:
         definition = await self.repo.get(definition_id)
         if not definition:
             raise ValueError(f"FlowDefinition {definition_id} not found")
-        return FlowValidationService.validate(definition.definition or {})
+        return await FlowValidationService.validate(
+            definition.definition or {}, template_service=TemplateService(self.repo.session),
+        )
 
     async def publish(self, definition_id: UUID) -> FlowDefinitionSchema:
         definition = await self.repo.get(definition_id)
         if not definition:
             raise ValueError(f"FlowDefinition {definition_id} not found")
 
-        result = FlowValidationService.validate(definition.definition or {})
+        result = await FlowValidationService.validate(
+            definition.definition or {}, template_service=TemplateService(self.repo.session),
+        )
         if not result["valid"]:
             raise ValueError(result)
 
