@@ -24,6 +24,17 @@ Configuration (node.config):
 
     wait_type == "replied":
         channel (str, optional, default "whatsapp").
+        timeout (int, optional): duration after which, absent a reply, this
+            node is considered timed out. unit (str, optional, default
+            "minutes"). Omit both (every pre-existing "replied" Wait node)
+            to wait for a reply indefinitely — unchanged behavior.
+        replied_next_node_id / timeout_next_node_id (str, optional): the two
+            single next-node targets ExecutionEngine._resume_from routes to
+            on resume — the reply branch or the timeout branch, never both.
+            Required together when "timeout" is set (see
+            flow_validation_service.py); a plain single-successor "replied"
+            Wait (no timeout) ignores both and keeps following its one
+            outgoing edge as before.
 
     wait_type in {"stage_changed", "field_condition"}:
         field (str): lead field to watch, e.g. "stage" or "visit_completed".
@@ -252,6 +263,17 @@ class WaitExecutor(BaseNodeExecutor):
         if wait_type == "replied":
             wait_condition["channel"] = node_config.get("channel", "whatsapp")
             description = f"Wait until lead replied ({wait_condition['channel']})"
+            # Optional timeout — every existing "replied" Wait node has no
+            # "timeout" key at all, so wait_condition gets no
+            # "timeout_seconds" key either and wait_condition_service.py
+            # waits forever for a reply, exactly as before. Only a node that
+            # explicitly opts in (e.g. a two-branch replied/timeout-next-node
+            # Wait — see ExecutionEngine._resume_from) gets this key.
+            timeout_duration = node_config.get("timeout")
+            timeout_unit = node_config.get("timeout_unit", "minutes")
+            if timeout_duration:
+                wait_condition["timeout_seconds"] = timeout_duration * UNIT_SECONDS.get(timeout_unit, 60)
+                description += f", or after {timeout_duration} {timeout_unit} with no reply"
         elif wait_type == "webhook_event":
             wait_condition["event_key"] = node_config.get("event_key", "")
             description = f"Wait until external event '{wait_condition['event_key']}'"

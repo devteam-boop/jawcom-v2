@@ -234,7 +234,21 @@ class FlowValidationService:
                             node_id=nid,
                         ))
                 elif wait_type == "replied":
-                    pass  # channel defaults to "whatsapp" — nothing required
+                    # channel defaults to "whatsapp" — nothing required. An
+                    # optional timeout (falls through to a timeout branch if
+                    # the lead never replies) needs both single next-node
+                    # targets so ExecutionEngine._resume_from knows which one
+                    # edge to take on resume — see wait_executor.py's
+                    # docstring. A plain "replied" Wait with no timeout is
+                    # untouched by this check.
+                    if config.get("timeout") and not (
+                        config.get("replied_next_node_id") and config.get("timeout_next_node_id")
+                    ):
+                        errors.append(_node_error(
+                            f"Wait '{lbl}' (replied, with timeout) requires both a "
+                            f"replied_next_node_id and a timeout_next_node_id",
+                            node_id=nid,
+                        ))
                 else:
                     # "duration" (default — every existing saved Wait node
                     # with no "wait_type" key at all validates exactly as

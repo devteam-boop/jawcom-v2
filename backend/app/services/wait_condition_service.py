@@ -12,7 +12,7 @@ the identical ExecutionEngine.resume_instance() call).
 
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,34 @@ from app.runtime.schemas import RunningInstanceSchema
 from app.services.running_instance_service import RunningInstanceService
 
 logger = logging.getLogger(__name__)
+
+
+async def has_replied_since(
+    lead_id: int,
+    channel: str,
+    started_at_str: Optional[str],
+    event_repo: CommunicationEventRepository,
+) -> bool:
+    """Single source of truth for "has this lead replied on this channel
+    since a given timestamp" — used both by _is_satisfied's "replied"
+    condition below (deciding an event-based Wait is due) and by
+    ExecutionEngine._resume_from (telling a two-branch Wait(replied) node's
+    reply branch apart from its timeout branch on resume), so neither
+    caller keeps its own copy of this check.
+    """
+    anchor = await event_repo.get_latest_by_lead_and_event_type(lead_id, "replied", channel=channel)
+    if anchor is None:
+        return False
+    if not started_at_str:
+        return True
+    try:
+        started_at = datetime.fromisoformat(started_at_str)
+    except ValueError:
+        return True
+    # Only a reply that happened AFTER this wait node started counts — a
+    # stale reply from before the journey reached this node must not
+    # immediately resolve it.
+    return anchor.occurred_at.replace(tzinfo=None) > started_at
 
 
 async def find_due_events(session: AsyncSession) -> List[RunningInstanceSchema]:
@@ -63,19 +91,24 @@ async def _is_satisfied(
     if condition_type == "replied":
         channel = condition.get("channel", "whatsapp")
         started_at_str = condition.get("started_at")
-        anchor = await event_repo.get_latest_by_lead_and_event_type(lead_id, "replied", channel=channel)
-        if anchor is None:
-            return False
-        if not started_at_str:
+        if await has_replied_since(lead_id, channel, started_at_str, event_repo):
             return True
+        # No reply yet. An optional configured timeout is the only other way
+        # this instance becomes due — a two-branch Wait(replied) node (see
+        # ExecutionEngine._resume_from, which re-derives replied-vs-timeout
+        # via the same has_replied_since() call above) uses it to fall
+        # through to its timeout edge instead of waiting forever. Every
+        # pre-existing "replied" Wait node has no "timeout_seconds" key at
+        # all, so this always returns False here — "wait until replied,
+        # however long it takes" is completely unchanged for those.
+        timeout_seconds = condition.get("timeout_seconds")
+        if not timeout_seconds or not started_at_str:
+            return False
         try:
             started_at = datetime.fromisoformat(started_at_str)
         except ValueError:
-            return True
-        # Only a reply that happened AFTER this wait node started counts —
-        # a stale reply from before the journey reached this node must not
-        # immediately resolve it.
-        return anchor.occurred_at.replace(tzinfo=None) > started_at
+            return False
+        return (datetime.utcnow() - started_at).total_seconds() >= timeout_seconds
 
     if condition_type in ("stage_changed", "field_condition"):
         field = condition.get("field", "")

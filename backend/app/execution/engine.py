@@ -617,6 +617,7 @@ class ExecutionEngine:
         instance_service: RunningInstanceService,
         event_service: CommunicationEventService,
         exec_ctx: Optional[ExecutionContext] = None,
+        forced_next_node_id: Optional[str] = None,
     ) -> None:
         """Walk through the flow graph dispatching every node to its executor.
 
@@ -627,6 +628,13 @@ class ExecutionEngine:
         Traversal stops when:
         * An end node is reached (executor returns ``next_node_id=None``).
         * Any executor fails.
+
+        ``forced_next_node_id``: when given, traversal starts at exactly this
+        one node instead of every neighbour of *start_node_id* — used when
+        *start_node_id* is a resumed two-branch Wait(replied) node, so only
+        its reply branch OR its timeout branch runs, never both (see
+        ExecutionEngine._resume_from). None (every other caller) preserves
+        the full-adjacency behavior unchanged.
         """
         nodes = definition.get("nodes") or []
         edges = definition.get("edges") or []
@@ -641,7 +649,7 @@ class ExecutionEngine:
             if src and tgt:
                 adjacency.setdefault(src, []).append(tgt)
 
-        queue: list = list(adjacency.get(start_node_id, []))
+        queue: list = [forced_next_node_id] if forced_next_node_id else list(adjacency.get(start_node_id, []))
         visited: set = {start_node_id}
 
         while queue:
@@ -824,6 +832,7 @@ class ExecutionEngine:
                     clean_data.pop("_pause_reason", None)
                     clean_data.pop("_pause_node_id", None)
 
+                forced_next_node_id: Optional[str] = None
                 if skip_current:
                     if start_node.get("type") == "wait":
                         await self._record_communication_event(
@@ -835,6 +844,34 @@ class ExecutionEngine:
                             event_type=CommunicationEventType.WAIT_COMPLETED.value,
                             payload={"resumed_at": datetime.utcnow().isoformat()},
                         )
+
+                        wait_config = start_node.get("config") or {}
+                        replied_next_node_id = wait_config.get("replied_next_node_id")
+                        timeout_next_node_id = wait_config.get("timeout_next_node_id")
+                        if (
+                            wait_config.get("wait_type") == "replied"
+                            and replied_next_node_id
+                            and timeout_next_node_id
+                        ):
+                            # Two-branch Wait(replied): the scheduler resumed
+                            # this instance either because a genuine reply
+                            # arrived or because the configured timeout
+                            # elapsed with none (wait_condition_service.py's
+                            # _is_satisfied) — re-derive which one actually
+                            # happened via the exact same reply check that
+                            # service already uses (has_replied_since), so
+                            # there's a single source of truth for "has this
+                            # lead replied" and exactly one of the two edges
+                            # is taken, never both.
+                            from app.services.wait_condition_service import has_replied_since
+                            original_wait_condition = instance_data.get("wait_condition") or {}
+                            replied = await has_replied_since(
+                                instance.lead_id,
+                                original_wait_condition.get("channel", "whatsapp"),
+                                original_wait_condition.get("started_at"),
+                                event_service.repo,
+                            )
+                            forced_next_node_id = replied_next_node_id if replied else timeout_next_node_id
 
                     # Schedule mode: skip current node, traverse from neighbours
                     # First update instance data to remove resume_at
@@ -852,6 +889,7 @@ class ExecutionEngine:
                         log_service=log_service,
                         instance_service=instance_service,
                         event_service=event_service,
+                        forced_next_node_id=forced_next_node_id,
                     )
                 else:
                     # Retry mode: execute the current node then traverse
