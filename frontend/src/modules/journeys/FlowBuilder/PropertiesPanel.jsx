@@ -24,6 +24,48 @@ import { templateService } from "@/services/templates";
 import { formatDateTime } from "@/lib/dateFormat";
 
 const UNIT_SECONDS = { minutes: 60, hours: 3600, days: 86400, weeks: 604800 };
+
+// Every dotted path a Condition node's "field" can actually resolve at
+// execution time (see backend/app/services/flow_validation_service.py's
+// _RESOLVABLE_LEAD_FIELDS/_RESOLVABLE_COMPANY_FIELDS — kept in sync
+// manually, same tradeoff as frontend/src/modules/inbox/whatsappWindow.js).
+// Anything picked here is guaranteed resolvable; the Field input below
+// stays free-text underneath so a still-valid custom path isn't blocked.
+const CONDITION_FIELD_OPTIONS = [
+  ["lead.has_replied", "Reply: Has Replied (bool)"],
+  ["lead.last_inbound_at", "Reply: Last Inbound At (timestamp)"],
+  ["lead.replied_since_journey_start", "Reply: Replied Since Journey Start (bool)"],
+  ["lead.id", "Lead: ID"],
+  ["lead.name", "Lead: Name"],
+  ["lead.email", "Lead: Email"],
+  ["lead.phone", "Lead: Phone"],
+  ["lead.city", "Lead: City"],
+  ["lead.first_name", "Lead: First Name"],
+  ["lead.last_name", "Lead: Last Name"],
+  ["lead.company", "Lead: Company Name"],
+  ["lead.building_name", "Lead: Building Name"],
+  ["lead.building_id", "Lead: Building ID"],
+  ["lead.agent_name", "Lead: Agent Name"],
+  ["lead.assigned_to", "Lead: Assigned To"],
+  ["lead.seats", "Lead: Seats"],
+  ["lead.options_link", "Lead: Options Link"],
+  ["lead.tour_datetime", "Lead: Tour Date/Time"],
+  ["lead.map_link", "Lead: Map Link"],
+  ["lead.plan_type", "Lead: Plan Type"],
+  ["lead.proposal_link", "Lead: Proposal Link"],
+  ["lead.price", "Lead: Price"],
+  ["lead.move_in_date", "Lead: Move-in Date"],
+  ["company.id", "Company: ID"],
+  ["company.name", "Company: Name"],
+  ["company.industry", "Company: Industry"],
+  ["company.size", "Company: Size"],
+  ["company.website", "Company: Website"],
+  ["today", "Today's Date"],
+  ["now", "Current Timestamp"],
+  ["journey.name", "Journey Name"],
+  ["execution.id", "Execution ID"],
+];
+
 const CONDITION_OPERATORS = [
   ["equals", "Equals"],
   ["not_equals", "Not Equals"],
@@ -57,6 +99,12 @@ const VARIABLE_PREVIEWS = {
   "today": "2026-07-06",
   "now": "2026-07-06T12:00:00",
   "execution.id": "abc-123-def-456",
+  // Reply/communication facts (Condition Node Hardening) — derived from
+  // communication_events by ExecutionEngine, not part of LeadProvider's own
+  // schema, so shown separately from the 18-field contract below.
+  "lead.has_replied": "true",
+  "lead.last_inbound_at": "2026-07-24T10:02:15",
+  "lead.replied_since_journey_start": "true",
   // Standardized 18-field variable contract — bare names (as used directly
   // in template bodies, e.g. {{building_name}}), matching the sample values
   // DummyLeadProvider returns at execution time (see
@@ -596,8 +644,27 @@ function ConfigFields({ nodeType, config, onUpdateConfig, onUpdateConfigBatch })
         <>
           <div className="space-y-1.5">
             <Label>Field</Label>
+            {/* Quick-insert picker for every field the execution engine can
+                actually resolve (including the reply/communication facts
+                added in this hardening pass) — sets the same "field" config
+                key the Input below reads/writes, so picking one just fills
+                the free-text input rather than replacing it with a
+                separate, disconnected control. */}
+            <Select
+              value={undefined}
+              onValueChange={(v) => onUpdateConfig("field", v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Insert a known field…" />
+              </SelectTrigger>
+              <SelectContent>
+                {CONDITION_FIELD_OPTIONS.map(([v, label]) => (
+                  <SelectItem key={v} value={v}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Input
-              placeholder="e.g. lead.stage"
+              placeholder="e.g. lead.phone"
               value={config.field || ""}
               onChange={(e) => onUpdateConfig("field", e.target.value)}
             />

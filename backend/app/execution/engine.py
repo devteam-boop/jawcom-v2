@@ -51,6 +51,7 @@ from app.services.running_instance_service import RunningInstanceService
 from app.services.flow_execution_log_service import FlowExecutionLogService
 from app.services.variable_resolver_service import VariableResolverService
 from app.services.communication_event_service import CommunicationEventService
+from app.services.wait_condition_service import get_reply_facts
 from app.runtime.schemas import RunningInstanceCreateSchema, RunningInstanceUpdateSchema
 from app.flow_definitions.schemas import FlowExecutionLogCreateSchema
 from app.communication_events.schemas import CommunicationEventCreateSchema
@@ -212,9 +213,20 @@ class ExecutionEngine:
                         "flow_definition_id": str(flow_def.id),
                     }
                     node_outputs: Dict[str, Any] = {}
+                    # Reply/communication facts (Condition Node Hardening,
+                    # FIX 2) — the only prior way to see a reply was the Wait
+                    # node's dedicated "replied" event-condition; a Condition
+                    # node had no access to communication_events at all.
+                    # Merged onto the *lead* dict (not a new namespace) so
+                    # both "lead.has_replied" and the bare "has_replied"
+                    # fallback resolve identically to every other lead field.
+                    lead_dict = dict(lead_context.get("lead", {}))
+                    lead_dict.update(await get_reply_facts(
+                        int(lead_id), "whatsapp", instance.started_at, event_service.repo,
+                    ))
                     exec_ctx = ExecutionContext(
                         lead_id=int(lead_id),
-                        lead=lead_context.get("lead", {}),
+                        lead=lead_dict,
                         company=lead_context.get("company"),
                         journey_name=journey.name or "",
                         instance_id=str(instance.id),
@@ -785,9 +797,16 @@ class ExecutionEngine:
                 ctx_dict.update(instance_data)
                 node_outputs: Dict[str, Any] = {}
 
+                # See the matching comment in _execute_for_stage — same
+                # reply-facts enrichment for the resume/retry path.
+                lead_dict = dict(lead_context.get("lead", {}))
+                lead_dict.update(await get_reply_facts(
+                    instance.lead_id, "whatsapp", instance.started_at, event_service.repo,
+                ))
+
                 exec_ctx = ExecutionContext(
                     lead_id=instance.lead_id,
-                    lead=lead_context.get("lead", {}),
+                    lead=lead_dict,
                     company=lead_context.get("company"),
                     journey_name=journey.name or "",
                     instance_id=str(instance.id),

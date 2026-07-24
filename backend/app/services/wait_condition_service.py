@@ -12,7 +12,7 @@ the identical ExecutionEngine.resume_instance() call).
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +51,42 @@ async def has_replied_since(
     # stale reply from before the journey reached this node must not
     # immediately resolve it.
     return anchor.occurred_at.replace(tzinfo=None) > started_at
+
+
+async def get_reply_facts(
+    lead_id: int,
+    channel: str,
+    journey_started_at: Optional[datetime],
+    event_repo: CommunicationEventRepository,
+) -> Dict[str, Any]:
+    """Reply/communication facts derived from communication_events, exposed
+    on ExecutionContext's lead.* namespace (see ExecutionEngine) so a
+    Condition node can actually test "has the customer replied" — the only
+    prior way to see a reply was the Wait node's dedicated wait_type=
+    "replied" branch, which a Condition node has no access to at all.
+    Reuses has_replied_since() (this module) rather than a second copy of
+    the same "is there a replied event, and is it recent enough" check.
+
+    Returns:
+        has_replied: a 'replied' event exists at all for this lead/channel.
+        last_inbound_at: that event's occurred_at (ISO string), or None.
+        replied_since_journey_start: the reply happened after
+            *journey_started_at* (the running_journey_instance's own
+            started_at) — None for journey_started_at skips this stricter
+            check (has_replied_since already treats a missing timestamp as
+            "any reply counts").
+    """
+    anchor = await event_repo.get_latest_by_lead_and_event_type(lead_id, "replied", channel=channel)
+    last_inbound_at = anchor.occurred_at.isoformat() if anchor else None
+    has_replied = anchor is not None
+    replied_since_journey_start = await has_replied_since(
+        lead_id, channel, journey_started_at.isoformat() if journey_started_at else None, event_repo,
+    )
+    return {
+        "has_replied": has_replied,
+        "last_inbound_at": last_inbound_at,
+        "replied_since_journey_start": replied_since_journey_start,
+    }
 
 
 async def find_due_events(session: AsyncSession) -> List[RunningInstanceSchema]:
